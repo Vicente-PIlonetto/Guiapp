@@ -181,6 +181,45 @@ select {
   color: #96a4b5;
 }
 
+.upload-progress {
+  border: 1px solid #242424;
+  background: #050505;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.progress-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #aeb9c7;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.progress-row span:first-child {
+  overflow-wrap: anywhere;
+}
+
+.progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #161616;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #e6edf3;
+  transition: width 160ms ease;
+}
+
+.progress-fill.active {
+  background: #b9d8ff;
+}
+
 .primary, .secondary, .downloads a {
   display: inline-flex;
   align-items: center;

@@ -20,6 +20,7 @@ function App() {
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [upload, setUpload] = useState({ active: false, progress: 0, complete: false });
   const inputRef = useRef(null);
 
   const selectedModule = useMemo(
@@ -53,6 +54,7 @@ function App() {
   function acceptFile(nextFile) {
     setError('');
     setJob(null);
+    setUpload({ active: false, progress: 0, complete: false });
     setFile(nextFile);
   }
 
@@ -70,7 +72,39 @@ function App() {
     setConfirmation(false);
     setJob(null);
     setError('');
+    setUpload({ active: false, progress: 0, complete: false });
     setFile(null);
+  }
+
+  function createJob(formData) {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', `${API_BASE}/api/jobs`);
+      request.responseType = 'json';
+
+      request.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          setUpload((current) => ({ ...current, active: true }));
+          return;
+        }
+        const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        setUpload({ active: true, progress, complete: progress === 100 });
+      };
+
+      request.onload = () => {
+        const data = request.response || {};
+        if (request.status >= 200 && request.status < 300) {
+          setUpload({ active: false, progress: 100, complete: true });
+          resolve(data);
+          return;
+        }
+        reject(new Error(data.detail || 'Falha ao iniciar processamento.'));
+      };
+
+      request.onerror = () => reject(new Error('Nao foi possivel enviar o arquivo ao backend.'));
+      request.onabort = () => reject(new Error('Upload cancelado.'));
+      request.send(formData);
+    });
   }
 
   async function submit() {
@@ -84,19 +118,18 @@ function App() {
     }
 
     setError('');
+    setUpload({ active: true, progress: 0, complete: false });
     const formData = new FormData();
     formData.append('module_id', selectedModule.id);
     formData.append('confirmation', String(confirmation));
     formData.append('file', file);
 
-    const response = await fetch(`${API_BASE}/api/jobs`, {
-      method: 'POST',
-      body: formData
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      setError(data.detail || 'Falha ao iniciar processamento.');
+    let data;
+    try {
+      data = await createJob(formData);
+    } catch (uploadError) {
+      setError(uploadError.message);
+      setUpload({ active: false, progress: 0, complete: false });
       return;
     }
 
@@ -110,7 +143,17 @@ function App() {
   }
 
   const busy = job?.status === 'pending' || job?.status === 'processing';
-  const canRun = selectedModule?.enabled && file && !busy;
+  const uploading = upload.active;
+  const canRun = selectedModule?.enabled && file && !busy && !uploading;
+  const uploadStatus = upload.active
+    ? upload.progress >= 100
+      ? 'Upload completo. Criando job no servidor...'
+      : `Enviando arquivo: ${upload.progress}%`
+    : upload.complete
+      ? 'Upload completo. Processamento iniciado.'
+      : file
+        ? 'Arquivo pronto para envio.'
+        : '';
 
   return (
     <main className="shell">
@@ -174,6 +217,7 @@ function App() {
             <input
               ref={inputRef}
               type="file"
+              accept={selectedModule?.accepted_extensions.join(',')}
               hidden
               onChange={(event) => {
                 const nextFile = event.target.files?.[0];
@@ -181,6 +225,21 @@ function App() {
               }}
             />
           </div>
+
+          {file && (
+            <div className="upload-progress" aria-live="polite">
+              <div className="progress-row">
+                <span>{uploadStatus}</span>
+                <span>{upload.complete ? '100%' : `${upload.progress}%`}</span>
+              </div>
+              <div className="progress-track" aria-hidden="true">
+                <div
+                  className={`progress-fill ${upload.active ? 'active' : ''}`}
+                  style={{ width: `${upload.complete ? 100 : upload.progress}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           {selectedModule?.requires_confirmation && (
             <label className="risk-box">
@@ -202,8 +261,8 @@ function App() {
           )}
 
           <button className="primary" disabled={!canRun} onClick={submit}>
-            {busy ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            {selectedModule ? actionLabel[selectedModule.operation_type] : 'Iniciar'}
+            {busy || uploading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+            {uploading ? 'Enviando arquivo' : selectedModule ? actionLabel[selectedModule.operation_type] : 'Iniciar'}
           </button>
         </section>
 
