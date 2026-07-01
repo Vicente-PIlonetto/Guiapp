@@ -20,8 +20,9 @@ function App() {
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
-  const [upload, setUpload] = useState({ active: false, progress: 0, complete: false });
+  const [upload, setUpload] = useState({ active: false, progress: 0, complete: false, id: null });
   const inputRef = useRef(null);
+  const uploadSeqRef = useRef(0);
 
   const selectedModule = useMemo(
     () => modules.find((item) => item.id === moduleId),
@@ -51,11 +52,62 @@ function App() {
     return () => clearInterval(timer);
   }, [job]);
 
-  function acceptFile(nextFile) {
+  function uploadFile(nextFile, module) {
+    const uploadSeq = uploadSeqRef.current + 1;
+    uploadSeqRef.current = uploadSeq;
+
+    setUpload({ active: true, progress: 0, complete: false, id: null });
+    const formData = new FormData();
+    formData.append('module_id', module.id);
+    formData.append('file', nextFile);
+
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', `${API_BASE}/api/uploads`);
+      request.responseType = 'json';
+
+      request.upload.onprogress = (event) => {
+        if (uploadSeq !== uploadSeqRef.current) return;
+        if (!event.lengthComputable) {
+          setUpload((current) => ({ ...current, active: true }));
+          return;
+        }
+        const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        setUpload({ active: true, progress, complete: false, id: null });
+      };
+
+      request.onload = () => {
+        if (uploadSeq !== uploadSeqRef.current) return;
+        const data = request.response || {};
+        if (request.status >= 200 && request.status < 300) {
+          setUpload({ active: false, progress: 100, complete: true, id: data.upload?.upload_id });
+          resolve(data);
+          return;
+        }
+        reject(new Error(data.detail || 'Falha ao enviar arquivo.'));
+      };
+
+      request.onerror = () => reject(new Error('Nao foi possivel enviar o arquivo ao backend.'));
+      request.onabort = () => reject(new Error('Upload cancelado.'));
+      request.send(formData);
+    });
+  }
+
+  async function acceptFile(nextFile) {
     setError('');
     setJob(null);
-    setUpload({ active: false, progress: 0, complete: false });
+    setUpload({ active: false, progress: 0, complete: false, id: null });
     setFile(nextFile);
+    if (!selectedModule) {
+      setError('Selecione um modulo antes de enviar o arquivo.');
+      return;
+    }
+    try {
+      await uploadFile(nextFile, selectedModule);
+    } catch (uploadError) {
+      setError(uploadError.message);
+      setUpload({ active: false, progress: 0, complete: false, id: null });
+    }
   }
 
   function onDrop(event) {
@@ -72,44 +124,18 @@ function App() {
     setConfirmation(false);
     setJob(null);
     setError('');
-    setUpload({ active: false, progress: 0, complete: false });
+    uploadSeqRef.current += 1;
+    setUpload({ active: false, progress: 0, complete: false, id: null });
     setFile(null);
-  }
-
-  function createJob(formData) {
-    return new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open('POST', `${API_BASE}/api/jobs`);
-      request.responseType = 'json';
-
-      request.upload.onprogress = (event) => {
-        if (!event.lengthComputable) {
-          setUpload((current) => ({ ...current, active: true }));
-          return;
-        }
-        const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
-        setUpload({ active: true, progress, complete: progress === 100 });
-      };
-
-      request.onload = () => {
-        const data = request.response || {};
-        if (request.status >= 200 && request.status < 300) {
-          setUpload({ active: false, progress: 100, complete: true });
-          resolve(data);
-          return;
-        }
-        reject(new Error(data.detail || 'Falha ao iniciar processamento.'));
-      };
-
-      request.onerror = () => reject(new Error('Nao foi possivel enviar o arquivo ao backend.'));
-      request.onabort = () => reject(new Error('Upload cancelado.'));
-      request.send(formData);
-    });
   }
 
   async function submit() {
     if (!selectedModule || !file) {
       setError('Selecione um modulo e um arquivo.');
+      return;
+    }
+    if (!upload.complete || !upload.id) {
+      setError('Aguarde o upload completar antes de iniciar.');
       return;
     }
     if (selectedModule.requires_confirmation && !confirmation) {
@@ -118,18 +144,23 @@ function App() {
     }
 
     setError('');
-    setUpload({ active: true, progress: 0, complete: false });
     const formData = new FormData();
     formData.append('module_id', selectedModule.id);
     formData.append('confirmation', String(confirmation));
-    formData.append('file', file);
+    formData.append('upload_id', upload.id);
 
     let data;
     try {
-      data = await createJob(formData);
-    } catch (uploadError) {
-      setError(uploadError.message);
-      setUpload({ active: false, progress: 0, complete: false });
+      const response = await fetch(`${API_BASE}/api/jobs`, {
+        method: 'POST',
+        body: formData
+      });
+      data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'Falha ao iniciar processamento.');
+      }
+    } catch (jobError) {
+      setError(jobError.message);
       return;
     }
 
@@ -144,15 +175,15 @@ function App() {
 
   const busy = job?.status === 'pending' || job?.status === 'processing';
   const uploading = upload.active;
-  const canRun = selectedModule?.enabled && file && !busy && !uploading;
+  const canRun = selectedModule?.enabled && file && upload.complete && upload.id && !busy && !uploading;
   const uploadStatus = upload.active
     ? upload.progress >= 100
-      ? 'Upload completo. Criando job no servidor...'
+      ? 'Upload recebido. Validando no servidor...'
       : `Enviando arquivo: ${upload.progress}%`
     : upload.complete
-      ? 'Upload completo. Processamento iniciado.'
+      ? 'Upload completo. Pronto para iniciar.'
       : file
-        ? 'Arquivo pronto para envio.'
+        ? 'Aguardando upload.'
         : '';
 
   return (

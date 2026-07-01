@@ -1,6 +1,8 @@
 from pathlib import Path
 from uuid import uuid4
+import json
 import shutil
+from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,12 +40,89 @@ def modules() -> dict:
     return {"modules": list_modules()}
 
 
+def upload_dir(upload_id: str) -> Path:
+    if not upload_id or any(char not in "0123456789abcdef" for char in upload_id):
+        raise HTTPException(status_code=400, detail="Upload invalido.")
+    return get_settings().storage_path / "uploads" / upload_id
+
+
+async def save_upload(module_id: str, file: UploadFile) -> dict:
+    module = get_module(module_id)
+    if not module:
+        raise HTTPException(status_code=404, detail="Modulo nao encontrado.")
+    if not module.enabled:
+        raise HTTPException(status_code=400, detail=module.disabled_reason or "Modulo indisponivel.")
+
+    display_name = safe_display_name(file.filename or "upload.bin")
+    suffix = Path(display_name).suffix.lower()
+    if suffix not in module.accepted_extensions:
+        raise HTTPException(status_code=400, detail=f"Extensao nao aceita: {suffix or '(sem extensao)'}")
+
+    upload_id = uuid4().hex
+    target_dir = upload_dir(upload_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = target_dir / f"original{suffix}"
+
+    max_bytes = get_settings().max_upload_bytes
+    written = 0
+    try:
+        with upload_path.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="Arquivo excede o tamanho maximo permitido.")
+                out.write(chunk)
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+
+    metadata = {
+        "upload_id": upload_id,
+        "module_id": module.id,
+        "original_filename": display_name,
+        "stored_filename": upload_path.name,
+        "size": written,
+    }
+    (target_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return metadata
+
+
+@app.post("/api/uploads")
+async def create_upload(
+    module_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    return {"upload": await save_upload(module_id, file)}
+
+
+def consume_upload(upload_id: str, module_id: str, job_id: str) -> tuple[str, Path]:
+    source_dir = upload_dir(upload_id)
+    metadata_path = source_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail="Upload nao encontrado ou expirado.")
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("module_id") != module_id:
+        raise HTTPException(status_code=400, detail="Upload pertence a outro modulo.")
+
+    source_path = source_dir / metadata["stored_filename"]
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo enviado nao encontrado.")
+
+    paths = job_dirs(job_id)
+    destination = paths["upload"] / metadata["stored_filename"]
+    shutil.move(str(source_path), str(destination))
+    shutil.rmtree(source_dir, ignore_errors=True)
+    return metadata["original_filename"], destination
+
+
 @app.post("/api/jobs")
 async def create_job(
     background_tasks: BackgroundTasks,
     module_id: str = Form(...),
     confirmation: bool = Form(False),
-    file: UploadFile = File(...),
+    upload_id: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
 ) -> dict:
     module = get_module(module_id)
     if not module:
@@ -53,24 +132,14 @@ async def create_job(
     if module.requires_confirmation and not confirmation:
         raise HTTPException(status_code=400, detail="Confirmacao explicita obrigatoria para este modulo.")
 
-    display_name = safe_display_name(file.filename or "upload.bin")
-    suffix = Path(display_name).suffix.lower()
-    if suffix not in module.accepted_extensions:
-        raise HTTPException(status_code=400, detail=f"Extensao nao aceita: {suffix or '(sem extensao)'}")
-
     job_id = uuid4().hex
-    paths = job_dirs(job_id)
-    upload_path = paths["upload"] / f"original{suffix}"
-
-    max_bytes = get_settings().max_upload_bytes
-    written = 0
-    with upload_path.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            written += len(chunk)
-            if written > max_bytes:
-                shutil.rmtree(paths["upload"], ignore_errors=True)
-                raise HTTPException(status_code=413, detail="Arquivo excede o tamanho maximo permitido.")
-            out.write(chunk)
+    if upload_id:
+        display_name, upload_path = consume_upload(upload_id, module.id, job_id)
+    elif file:
+        metadata = await save_upload(module.id, file)
+        display_name, upload_path = consume_upload(metadata["upload_id"], module.id, job_id)
+    else:
+        raise HTTPException(status_code=400, detail="Envie um arquivo ou informe um upload_id.")
 
     job = Job(id=job_id, module_id=module.id, original_filename=display_name)
     job.add_log("Upload recebido e validado.")
