@@ -21,6 +21,7 @@ function App() {
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState({ active: false, progress: 0, complete: false, id: null });
+  const [config, setConfig] = useState(null);
   const inputRef = useRef(null);
   const uploadSeqRef = useRef(0);
 
@@ -38,6 +39,11 @@ function App() {
         if (firstEnabled) setModuleId(firstEnabled.id);
       })
       .catch(() => setError('Nao foi possivel conectar ao backend.'));
+
+    fetch(`${API_BASE}/api/config`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setConfig(data))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -245,6 +251,7 @@ function App() {
                 ? `Aceito: ${selectedModule.accepted_extensions.join(', ')}`
                 : 'Selecione um modulo'}
             </p>
+            {config && <p>Limite: {config.max_upload_gb} GB</p>}
             <button type="button" className="secondary">Selecionar arquivo</button>
             <input
               ref={inputRef}

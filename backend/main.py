@@ -46,6 +46,16 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/config")
+def public_config() -> dict:
+    settings = get_settings()
+    return {
+        "max_upload_mb": settings.max_upload_mb,
+        "max_upload_gb": round(settings.max_upload_mb / 1024, 2),
+        "upload_ttl_seconds": UPLOAD_TTL_SECONDS,
+    }
+
+
 @app.get("/api/modules")
 def modules() -> dict:
     return {"modules": list_modules()}
@@ -76,6 +86,11 @@ def validate_upload(module_id: str, filename: str) -> tuple[str, str]:
     return display_name, suffix
 
 
+def upload_limit_message() -> str:
+    settings = get_settings()
+    return f"Arquivo excede o tamanho maximo permitido ({settings.max_upload_mb} MB / {settings.max_upload_mb / 1024:.1f} GB)."
+
+
 def create_upload_paths(module_id: str, filename: str) -> tuple[dict, Path, Path]:
     display_name, suffix = validate_upload(module_id, filename)
     upload_id = uuid4().hex
@@ -101,7 +116,7 @@ async def save_upload(module_id: str, file: UploadFile) -> dict:
             while chunk := await file.read(1024 * 1024):
                 written += len(chunk)
                 if written > max_bytes:
-                    raise HTTPException(status_code=413, detail="Arquivo excede o tamanho maximo permitido.")
+                    raise HTTPException(status_code=413, detail=upload_limit_message())
                 out.write(chunk)
     except Exception:
         shutil.rmtree(target_dir, ignore_errors=True)
@@ -123,7 +138,7 @@ async def save_raw_upload(module_id: str, filename: str, request: Request) -> di
                     continue
                 written += len(chunk)
                 if written > max_bytes:
-                    raise HTTPException(status_code=413, detail="Arquivo excede o tamanho maximo permitido.")
+                    raise HTTPException(status_code=413, detail=upload_limit_message())
                 out.write(chunk)
     except Exception:
         shutil.rmtree(target_dir, ignore_errors=True)
