@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 
@@ -68,6 +69,29 @@ def _binary(name: str) -> Path:
     return path
 
 
+def _firebird_binary(setting_value: str, binary_name: str) -> str | None:
+    configured = Path(setting_value)
+    if configured.exists():
+        return str(configured)
+
+    from_path = shutil.which(setting_value)
+    if from_path:
+        return from_path
+
+    settings = get_settings()
+    local_filename = f"{binary_name}.exe" if os.name == "nt" else binary_name
+    candidates = [
+        settings.asset_dir / "firebird" / local_filename,
+        settings.asset_dir / "modules" / "Reparo de base" / local_filename,
+        settings.root_dir / "firebird" / local_filename,
+        settings.root_dir / "modules" / "Reparo de base" / local_filename,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
     paths = job_dirs(job.id)
     log_path = paths["log"]
@@ -91,6 +115,8 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
+        if not job.report_path and log_path.exists():
+            job.report_path = log_path
         _append_log(job, log_path, f"ERRO: {exc}")
 
 
@@ -132,10 +158,17 @@ def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None
 
 def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
     settings = get_settings()
-    gfix = shutil.which(settings.gfix_bin) or (settings.gfix_bin if Path(settings.gfix_bin).exists() else None)
-    gbak = shutil.which(settings.gbak_bin) or (settings.gbak_bin if Path(settings.gbak_bin).exists() else None)
+    gfix = _firebird_binary(settings.gfix_bin, "gfix")
+    gbak = _firebird_binary(settings.gbak_bin, "gbak")
     if not gfix or not gbak:
-        raise RunnerError("Dependencias Firebird nao encontradas. Configure GFIX_BIN e GBAK_BIN.")
+        raise RunnerError(
+            "Dependencias Firebird nao encontradas. Configure GFIX_BIN/GBAK_BIN "
+            "ou instale as ferramentas Firebird nativas do sistema."
+        )
+
+    job.report_path = paths["log"]
+    _append_log(job, paths["log"], f"Usando gfix: {gfix}")
+    _append_log(job, paths["log"], f"Usando gbak: {gbak}")
 
     working = copy_to(uploaded_file, paths["processing"] / "working.fdb")
     backup_original = copy_to(uploaded_file, paths["backup"] / "original.fdb")

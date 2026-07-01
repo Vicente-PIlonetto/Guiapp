@@ -10,7 +10,14 @@ Este modulo repara bases Firebird do Small.
 4. O backend cria backup, trabalha em copia isolada e executa `gfix`/`gbak`.
 5. Ao final, baixe a base reparada e consulte o relatorio/log.
 
-Configure no `.env`:
+No Ubuntu Server, instale as ferramentas Firebird nativas e deixe `gfix`/`gbak` no PATH:
+
+```bash
+sudo apt update
+sudo apt install firebird-utils
+```
+
+O nome do pacote pode variar conforme a versao do Ubuntu/Firebird. Se os comandos ficarem fora do PATH, configure os caminhos absolutos no `.env`:
 
 ```env
 GFIX_BIN=gfix
