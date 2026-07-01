@@ -4,9 +4,10 @@ import json
 import shutil
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from backend.config import get_settings
 from backend.job_store import add_job, get_job
@@ -23,6 +24,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class JobStartRequest(BaseModel):
+    module_id: str
+    confirmation: bool = False
+    upload_id: str
 
 
 @app.on_event("startup")
@@ -46,23 +53,38 @@ def upload_dir(upload_id: str) -> Path:
     return get_settings().storage_path / "uploads" / upload_id
 
 
-async def save_upload(module_id: str, file: UploadFile) -> dict:
+def validate_upload(module_id: str, filename: str) -> tuple[str, str]:
     module = get_module(module_id)
     if not module:
         raise HTTPException(status_code=404, detail="Modulo nao encontrado.")
     if not module.enabled:
         raise HTTPException(status_code=400, detail=module.disabled_reason or "Modulo indisponivel.")
 
-    display_name = safe_display_name(file.filename or "upload.bin")
+    display_name = safe_display_name(filename or "upload.bin")
     suffix = Path(display_name).suffix.lower()
     if suffix not in module.accepted_extensions:
         raise HTTPException(status_code=400, detail=f"Extensao nao aceita: {suffix or '(sem extensao)'}")
+    return display_name, suffix
 
+
+def create_upload_paths(module_id: str, filename: str) -> tuple[dict, Path, Path]:
+    display_name, suffix = validate_upload(module_id, filename)
     upload_id = uuid4().hex
     target_dir = upload_dir(upload_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     upload_path = target_dir / f"original{suffix}"
+    metadata = {
+        "upload_id": upload_id,
+        "module_id": module_id,
+        "original_filename": display_name,
+        "stored_filename": upload_path.name,
+        "size": 0,
+    }
+    return metadata, target_dir, upload_path
 
+
+async def save_upload(module_id: str, file: UploadFile) -> dict:
+    metadata, target_dir, upload_path = create_upload_paths(module_id, file.filename or "upload.bin")
     max_bytes = get_settings().max_upload_bytes
     written = 0
     try:
@@ -76,13 +98,33 @@ async def save_upload(module_id: str, file: UploadFile) -> dict:
         shutil.rmtree(target_dir, ignore_errors=True)
         raise
 
-    metadata = {
-        "upload_id": upload_id,
-        "module_id": module.id,
-        "original_filename": display_name,
-        "stored_filename": upload_path.name,
-        "size": written,
-    }
+    metadata["size"] = written
+    (target_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return metadata
+
+
+async def save_raw_upload(module_id: str, filename: str, request: Request) -> dict:
+    metadata, target_dir, upload_path = create_upload_paths(module_id, filename)
+    max_bytes = get_settings().max_upload_bytes
+    written = 0
+    try:
+        with upload_path.open("wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="Arquivo excede o tamanho maximo permitido.")
+                out.write(chunk)
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+
+    if written == 0:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="Arquivo vazio ou nao recebido.")
+
+    metadata["size"] = written
     (target_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return metadata
 
@@ -93,6 +135,15 @@ async def create_upload(
     file: UploadFile = File(...),
 ) -> dict:
     return {"upload": await save_upload(module_id, file)}
+
+
+@app.post("/api/uploads/raw")
+async def create_raw_upload(
+    request: Request,
+    module_id: str,
+    filename: str,
+) -> dict:
+    return {"upload": await save_raw_upload(module_id, filename, request)}
 
 
 def consume_upload(upload_id: str, module_id: str, job_id: str) -> tuple[str, Path]:
@@ -116,13 +167,11 @@ def consume_upload(upload_id: str, module_id: str, job_id: str) -> tuple[str, Pa
     return metadata["original_filename"], destination
 
 
-@app.post("/api/jobs")
-async def create_job(
+def create_job_from_upload(
     background_tasks: BackgroundTasks,
-    module_id: str = Form(...),
-    confirmation: bool = Form(False),
-    upload_id: Optional[str] = Form(None),
-    file: Optional[UploadFile] = File(None),
+    module_id: str,
+    confirmation: bool,
+    upload_id: str,
 ) -> dict:
     module = get_module(module_id)
     if not module:
@@ -133,9 +182,45 @@ async def create_job(
         raise HTTPException(status_code=400, detail="Confirmacao explicita obrigatoria para este modulo.")
 
     job_id = uuid4().hex
+    display_name, upload_path = consume_upload(upload_id, module.id, job_id)
+
+    job = Job(id=job_id, module_id=module.id, original_filename=display_name)
+    job.add_log("Upload recebido e validado.")
+    add_job(job)
+    background_tasks.add_task(run_job, job, module, upload_path)
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/start")
+async def start_job(
+    payload: JobStartRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    return create_job_from_upload(
+        background_tasks,
+        payload.module_id,
+        payload.confirmation,
+        payload.upload_id,
+    )
+
+
+@app.post("/api/jobs")
+async def create_job(
+    background_tasks: BackgroundTasks,
+    module_id: str = Form(...),
+    confirmation: bool = Form(False),
+    upload_id: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+) -> dict:
     if upload_id:
-        display_name, upload_path = consume_upload(upload_id, module.id, job_id)
+        return create_job_from_upload(background_tasks, module_id, confirmation, upload_id)
     elif file:
+        module = get_module(module_id)
+        if not module:
+            raise HTTPException(status_code=404, detail="Modulo nao encontrado.")
+        if module.requires_confirmation and not confirmation:
+            raise HTTPException(status_code=400, detail="Confirmacao explicita obrigatoria para este modulo.")
+        job_id = uuid4().hex
         metadata = await save_upload(module.id, file)
         display_name, upload_path = consume_upload(metadata["upload_id"], module.id, job_id)
     else:

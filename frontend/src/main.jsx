@@ -57,14 +57,15 @@ function App() {
     uploadSeqRef.current = uploadSeq;
 
     setUpload({ active: true, progress: 0, complete: false, id: null });
-    const formData = new FormData();
-    formData.append('module_id', module.id);
-    formData.append('file', nextFile);
+    const uploadUrl = new URL(`${API_BASE}/api/uploads/raw`);
+    uploadUrl.searchParams.set('module_id', module.id);
+    uploadUrl.searchParams.set('filename', nextFile.name);
 
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
-      request.open('POST', `${API_BASE}/api/uploads`);
+      request.open('POST', uploadUrl.toString());
       request.responseType = 'json';
+      request.setRequestHeader('Content-Type', 'application/octet-stream');
 
       request.upload.onprogress = (event) => {
         if (uploadSeq !== uploadSeqRef.current) return;
@@ -89,7 +90,7 @@ function App() {
 
       request.onerror = () => reject(new Error('Nao foi possivel enviar o arquivo ao backend.'));
       request.onabort = () => reject(new Error('Upload cancelado.'));
-      request.send(formData);
+      request.send(nextFile);
     });
   }
 
@@ -144,18 +145,18 @@ function App() {
     }
 
     setError('');
-    const formData = new FormData();
-    formData.append('module_id', selectedModule.id);
-    formData.append('confirmation', String(confirmation));
-    formData.append('upload_id', upload.id);
-
     let data;
     try {
-      const response = await fetch(`${API_BASE}/api/jobs`, {
+      const response = await fetch(`${API_BASE}/api/jobs/start`, {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          module_id: selectedModule.id,
+          confirmation,
+          upload_id: upload.id
+        })
       });
-      data = await response.json();
+      data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data.detail || 'Falha ao iniciar processamento.');
       }
