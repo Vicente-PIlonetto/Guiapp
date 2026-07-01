@@ -5,7 +5,6 @@ import shutil
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
 from backend.job_store import add_job, get_job
@@ -104,6 +103,35 @@ def download_output(job_id: str) -> FileResponse:
     return FileResponse(job.output_path, filename=job.output_path.name)
 
 
-frontend_dist = get_settings().asset_dir / "frontend" / "dist"
-if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+def frontend_dist_path() -> Path | None:
+    settings = get_settings()
+    candidates = [
+        settings.asset_dir / "frontend" / "dist",
+        settings.root_dir / "_internal" / "frontend" / "dist",
+        settings.root_dir / "frontend" / "dist",
+    ]
+    for candidate in candidates:
+        if (candidate / "index.html").exists():
+            return candidate
+    return None
+
+
+@app.get("/")
+def frontend_index() -> FileResponse:
+    dist = frontend_dist_path()
+    if not dist:
+        raise HTTPException(status_code=404, detail="Frontend build nao encontrado.")
+    return FileResponse(dist / "index.html")
+
+
+@app.get("/{path:path}")
+def frontend_asset_or_index(path: str) -> FileResponse:
+    if path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    dist = frontend_dist_path()
+    if not dist:
+        raise HTTPException(status_code=404, detail="Frontend build nao encontrado.")
+    requested = (dist / path).resolve()
+    if dist.resolve() in requested.parents and requested.is_file():
+        return FileResponse(requested)
+    return FileResponse(dist / "index.html")

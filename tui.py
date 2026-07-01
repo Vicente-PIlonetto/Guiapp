@@ -2,16 +2,30 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import platform
 import shutil
 import signal
 import subprocess
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 LOG_DIR = ROOT / "storage" / "logs"
 PID_FILE = ROOT / "storage" / "server.pid"
 ENV_FILE = ROOT / ".env"
+
+
+def packaged_exe_path() -> Path | None:
+    if platform.system().lower() != "windows":
+        return None
+    candidates = [
+        ROOT / "GUINAPP.exe",
+        ROOT / "dist" / "GUINAPP" / "GUINAPP.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def read_env() -> dict[str, str]:
@@ -58,16 +72,33 @@ def start_server() -> None:
     env_values = read_env()
     env = os.environ.copy()
     env.update(env_values)
-    host = env.get("APP_HOST", "0.0.0.0")
+    exe_path = packaged_exe_path()
+    host = env.get("APP_HOST", "127.0.0.1" if exe_path else "0.0.0.0")
     port = env.get("APP_PORT", "8000")
     log_file = (LOG_DIR / "server.log").open("a", encoding="utf-8")
-    process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", host, "--port", port],
-        cwd=str(ROOT),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        env=env,
-    )
+    if exe_path:
+        package_env = exe_path.parent / ".env"
+        package_values = dict(env_values)
+        package_values.setdefault("APP_HOST", host)
+        package_values.setdefault("APP_PORT", port)
+        package_values.setdefault("STORAGE_DIR", "storage")
+        content = "\n".join(f"{key}={value}" for key, value in sorted(package_values.items())) + "\n"
+        package_env.write_text(content, encoding="utf-8")
+        process = subprocess.Popen(
+            [str(exe_path)],
+            cwd=str(exe_path.parent),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+    else:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", host, "--port", port],
+            cwd=str(ROOT),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
     print(f"Servidor iniciado em http://localhost:{port} (PID {process.pid})")

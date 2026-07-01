@@ -93,6 +93,12 @@ No Windows, execute:
 powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1
 ```
 
+Para gerar em uma porta especifica e permitir acesso por outros PCs na rede:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1 -Port 8010 -HostAddress 0.0.0.0
+```
+
 O pacote fica em:
 
 ```text
@@ -100,6 +106,14 @@ dist\GUINAPP\GUINAPP.exe
 ```
 
 Ao abrir o EXE, ele inicia o servidor local e abre o navegador. O frontend React buildado e os binarios C ficam empacotados junto da aplicacao. As ferramentas Firebird Windows encontradas em `modules/Reparo de base` sao copiadas para `dist\GUINAPP\firebird`.
+
+Em outro PC da rede, acesse pelo IP do servidor:
+
+```text
+http://IP_DO_SERVIDOR:8010
+```
+
+No pacote Windows atual, o navegador nao abre automaticamente; use `GUINAPP-TUI.exe` para iniciar/parar e ver a URL.
 
 ## Tailscale Funnel
 

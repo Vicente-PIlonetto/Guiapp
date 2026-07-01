@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { AlertTriangle, CheckCircle2, Download, FileUp, Loader2, Play, ShieldAlert } from 'lucide-react';
 import './styles.css';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = (import.meta.env.VITE_API_BASE || window.location.origin).replace(/\/$/, '');
 
 const actionLabel = {
   analysis: 'Iniciar analise',
