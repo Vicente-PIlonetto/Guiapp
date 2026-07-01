@@ -57,7 +57,7 @@ def _run_command(
 
 
 def _binary(name: str) -> Path:
-    path = get_settings().root_dir / "modules" / "build" / name
+    path = get_settings().asset_dir / "modules" / "build" / name
     if path.exists():
         return path
     windows_path = path.with_suffix(".exe")

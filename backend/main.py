@@ -5,6 +5,7 @@ import shutil
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_settings
 from backend.job_store import add_job, get_job
@@ -101,3 +102,8 @@ def download_output(job_id: str) -> FileResponse:
     if not job or not job.output_path or not job.output_path.exists():
         raise HTTPException(status_code=404, detail="Arquivo de saida nao encontrado.")
     return FileResponse(job.output_path, filename=job.output_path.name)
+
+
+frontend_dist = get_settings().asset_dir / "frontend" / "dist"
+if frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

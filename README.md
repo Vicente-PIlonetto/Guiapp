@@ -85,6 +85,22 @@ python tui.py
 
 A TUI permite iniciar, parar, reiniciar, ver status, configurar porta/storage, ver logs, compilar modulos C e checar dependencias.
 
+## Gerar EXE para Windows
+
+No Windows, execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1
+```
+
+O pacote fica em:
+
+```text
+dist\GUINAPP\GUINAPP.exe
+```
+
+Ao abrir o EXE, ele inicia o servidor local e abre o navegador. O frontend React buildado e os binarios C ficam empacotados junto da aplicacao. As ferramentas Firebird Windows encontradas em `modules/Reparo de base` sao copiadas para `dist\GUINAPP\firebird`.
+
 ## Tailscale Funnel
 
 A aplicacao aceita porta configuravel por `APP_PORT`. Depois de iniciar o backend na porta desejada:

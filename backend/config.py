@@ -2,12 +2,14 @@ from functools import lru_cache
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import sys
 
 load_dotenv()
 
 
 class Settings:
-    root_dir = Path(__file__).resolve().parent.parent
+    root_dir = Path(os.getenv("GUINAPP_ROOT", Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent))
+    asset_dir = Path(getattr(sys, "_MEIPASS", root_dir))
     app_host = os.getenv("APP_HOST", "0.0.0.0")
     app_port = int(os.getenv("APP_PORT", "8000"))
     max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "200"))
