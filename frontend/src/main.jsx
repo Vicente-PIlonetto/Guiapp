@@ -180,7 +180,7 @@ function App() {
   const uploadStatus = upload.active
     ? upload.progress >= 100
       ? 'Upload recebido. Validando no servidor...'
-      : `Enviando arquivo: ${upload.progress}%`
+      : 'Enviando arquivo...'
     : upload.complete
       ? 'Upload completo. Pronto para iniciar.'
       : file

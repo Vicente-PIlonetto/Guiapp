@@ -12,7 +12,7 @@ class Settings:
     asset_dir = Path(getattr(sys, "_MEIPASS", root_dir))
     app_host = os.getenv("APP_HOST", "0.0.0.0")
     app_port = int(os.getenv("APP_PORT", "8000"))
-    max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "4096"))
+    max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", "5120"))
     storage_dir = Path(os.getenv("STORAGE_DIR", "storage"))
     gfix_bin = os.getenv("GFIX_BIN", "gfix")
     gbak_bin = os.getenv("GBAK_BIN", "gbak")

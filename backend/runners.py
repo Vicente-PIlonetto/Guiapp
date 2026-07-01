@@ -118,6 +118,8 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
         if not job.report_path and log_path.exists():
             job.report_path = log_path
         _append_log(job, log_path, f"ERRO: {exc}")
+    finally:
+        shutil.rmtree(paths["upload"], ignore_errors=True)
 
 
 def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:

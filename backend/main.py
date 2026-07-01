@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+import asyncio
 import json
 import shutil
 from typing import Optional
@@ -32,6 +33,9 @@ class JobStartRequest(BaseModel):
     upload_id: str
 
 
+UPLOAD_TTL_SECONDS = 5 * 60
+
+
 @app.on_event("startup")
 def startup() -> None:
     ensure_storage()
@@ -51,6 +55,11 @@ def upload_dir(upload_id: str) -> Path:
     if not upload_id or any(char not in "0123456789abcdef" for char in upload_id):
         raise HTTPException(status_code=400, detail="Upload invalido.")
     return get_settings().storage_path / "uploads" / upload_id
+
+
+async def cleanup_upload_later(upload_id: str) -> None:
+    await asyncio.sleep(UPLOAD_TTL_SECONDS)
+    shutil.rmtree(upload_dir(upload_id), ignore_errors=True)
 
 
 def validate_upload(module_id: str, filename: str) -> tuple[str, str]:
@@ -131,19 +140,25 @@ async def save_raw_upload(module_id: str, filename: str, request: Request) -> di
 
 @app.post("/api/uploads")
 async def create_upload(
+    background_tasks: BackgroundTasks,
     module_id: str = Form(...),
     file: UploadFile = File(...),
 ) -> dict:
-    return {"upload": await save_upload(module_id, file)}
+    metadata = await save_upload(module_id, file)
+    background_tasks.add_task(cleanup_upload_later, metadata["upload_id"])
+    return {"upload": metadata}
 
 
 @app.post("/api/uploads/raw")
 async def create_raw_upload(
     request: Request,
+    background_tasks: BackgroundTasks,
     module_id: str,
     filename: str,
 ) -> dict:
-    return {"upload": await save_raw_upload(module_id, filename, request)}
+    metadata = await save_raw_upload(module_id, filename, request)
+    background_tasks.add_task(cleanup_upload_later, metadata["upload_id"])
+    return {"upload": metadata}
 
 
 def consume_upload(upload_id: str, module_id: str, job_id: str) -> tuple[str, Path]:
