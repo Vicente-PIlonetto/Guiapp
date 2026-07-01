@@ -92,6 +92,17 @@ def _firebird_binary(setting_value: str, binary_name: str) -> str | None:
     return None
 
 
+def _raise_firebird_ods_error(completed: subprocess.CompletedProcess[str]) -> None:
+    output = completed.stdout or ""
+    marker = "unsupported on-disk structure"
+    if marker not in output.lower():
+        return
+    detail = next((line.strip() for line in output.splitlines() if marker in line.lower()), output.strip())
+    raise RunnerError(
+        f"{detail}. Instale ou configure GFIX_BIN/GBAK_BIN de uma versao Firebird compativel com a ODS da base."
+    )
+
+
 def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
     paths = job_dirs(job.id)
     log_path = paths["log"]
@@ -181,9 +192,13 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     auth = ["-user", settings.firebird_user, "-password", settings.firebird_password]
 
     validate = _run_command(job, paths["log"], [gfix, *auth, "-validate", str(working)], paths["processing"], check=False)
+    _raise_firebird_ods_error(validate)
     if validate.returncode != 0:
         _append_log(job, paths["log"], "Validacao retornou erro; tentando reparo com gfix -mend.")
-    _run_command(job, paths["log"], [gfix, *auth, "-mend", "-full", "-ignore", str(working)], paths["processing"])
+    mend = _run_command(job, paths["log"], [gfix, *auth, "-mend", "-full", "-ignore", str(working)], paths["processing"], check=False)
+    _raise_firebird_ods_error(mend)
+    if mend.returncode != 0:
+        raise RunnerError(f"Comando falhou com codigo {mend.returncode}.")
     _run_command(job, paths["log"], [gbak, *auth, "-b", "-g", "-ignore", str(working), str(backup_file)], paths["processing"])
     _run_command(job, paths["log"], [gbak, *auth, "-c", str(backup_file), str(repaired)], paths["processing"])
 
