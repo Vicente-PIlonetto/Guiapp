@@ -1,0 +1,10 @@
+Startup sequence...
+All services OK
+2026-04-30 10:00:00 Exception: NullReference at ModuleA
+Stack trace: line 1
+Stack trace: line 2
+Stack trace: line 3
+Continuing...
+2026-04-30 10:05:00 Erro: Falha ao gravar arquivo
+Detalhes: permission denied
+End of log

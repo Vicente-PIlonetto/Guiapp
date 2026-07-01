@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.dll
+*.exe
+.env
+.venv/
+frontend/node_modules/
+frontend/dist/
+GUINAPP-project.zip
+modules/build/
+modules/**/SAIDA/
+modules/**/Saida/
+modules/Reparo de base/runs/
+storage/uploads/*
+storage/processing/*
+storage/backups/*
+storage/results/*
+storage/logs/*
+!storage/uploads/.gitkeep
+!storage/processing/.gitkeep
+!storage/backups/.gitkeep
+!storage/results/.gitkeep
+!storage/logs/.gitkeep
