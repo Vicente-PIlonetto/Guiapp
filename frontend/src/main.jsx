@@ -218,21 +218,6 @@ function App() {
       </nav>
 
       <section className="workspace">
-        <section className="module-summary">
-          {selectedModule && (
-            <div className="module-info">
-              <div className="section-label">Modulo selecionado</div>
-              <h1>{selectedModule.name}</h1>
-              <p>{selectedModule.description}</p>
-              <div className="meta-row">
-                <span>{selectedModule.operation_type}</span>
-                <span>{selectedModule.accepted_extensions.join(', ')}</span>
-              </div>
-              {!selectedModule.enabled && <p className="warning">{selectedModule.disabled_reason}</p>}
-            </div>
-          )}
-        </section>
-
         <section className="upload-area">
           <div
             className={`dropzone ${dragging ? 'dragging' : ''}`}
@@ -251,6 +236,7 @@ function App() {
                 ? `Aceito: ${selectedModule.accepted_extensions.join(', ')}`
                 : 'Selecione um modulo'}
             </p>
+            {selectedModule?.description && <p>{selectedModule.description}</p>}
             {config && <p>Limite: {config.max_upload_gb} GB</p>}
             <button type="button" className="secondary">Selecionar arquivo</button>
             <input

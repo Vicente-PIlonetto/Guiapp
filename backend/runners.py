@@ -1,7 +1,9 @@
 from pathlib import Path
+import html
 import os
 import shutil
 import subprocess
+import zipfile
 
 from backend.config import get_settings
 from backend.models import Job, ModuleDefinition
@@ -69,6 +71,85 @@ def _binary(name: str) -> Path:
     if not path.exists():
         raise RunnerError(f"Binario nao encontrado: {path}. Execute `make modules`.")
     return path
+
+
+def _local_binary(name: str, target_dir: Path) -> Path:
+    source = _binary(name)
+    target = target_dir / source.name
+    copy_to(source, target)
+    return target
+
+
+def _text_report_to_html(report_path: Path, title: str, output_path: Path) -> Path:
+    content = report_path.read_text(encoding="utf-8", errors="replace")
+    escaped = html.escape(content)
+    document = f"""<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{ background: #0b0b0b; color: #e6edf3; font-family: Arial, sans-serif; margin: 32px; }}
+    h1 {{ font-size: 24px; margin-bottom: 18px; }}
+    pre {{ white-space: pre-wrap; background: #111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 18px; line-height: 1.5; }}
+  </style>
+</head>
+<body>
+  <h1>{html.escape(title)}</h1>
+  <pre>{escaped}</pre>
+</body>
+</html>
+"""
+    output_path.write_text(document, encoding="utf-8")
+    return output_path
+
+
+def _zip_files(output_path: Path, files: list[Path], base_dir: Path | None = None) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in files:
+            if not file_path.exists() or not file_path.is_file():
+                continue
+            try:
+                arcname = file_path.name if base_dir is None else file_path.relative_to(base_dir).as_posix()
+            except ValueError:
+                arcname = file_path.name
+            archive.write(file_path, arcname)
+    return output_path
+
+
+def _extract_xml_zip(zip_path: Path, target_dir: Path) -> list[Path]:
+    xml_dir = target_dir / "xmls"
+    xml_dir.mkdir(parents=True, exist_ok=True)
+    extracted: list[Path] = []
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            member_name = member.filename.replace("\\", "/")
+            if member.is_dir() or not member_name.lower().endswith(".xml"):
+                continue
+            source_name = Path(member_name).name
+            if not source_name:
+                continue
+            target = xml_dir / source_name
+            counter = 2
+            while target.exists():
+                target = xml_dir / f"{Path(source_name).stem}_{counter}{Path(source_name).suffix}"
+                counter += 1
+            with archive.open(member) as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+            extracted.append(target)
+    if not extracted:
+        raise RunnerError("Nenhum XML encontrado no arquivo ZIP.")
+    return extracted
+
+
+def _prepare_xml_input(uploaded_file: Path, paths: dict[str, Path]) -> tuple[Path, bool, int]:
+    if uploaded_file.suffix.lower() == ".zip":
+        extracted = _extract_xml_zip(uploaded_file, paths["processing"])
+        return paths["processing"] / "xmls", True, len(extracted)
+    suffix = uploaded_file.suffix.lower() or ".xml"
+    processing_input = copy_to(uploaded_file, paths["processing"] / f"input{suffix}")
+    return processing_input, False, 1
 
 
 def _firebird_binary(setting_value: str, binary_name: str) -> str | None:
@@ -145,13 +226,21 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
 
 
 def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
-    processing_input = copy_to(uploaded_file, paths["processing"] / "input.xml")
+    processing_input, is_batch, count = _prepare_xml_input(uploaded_file, paths)
     _run_command(job, paths["log"], [str(_binary("analise_xml_nfe")), str(processing_input)], paths["processing"])
     report = paths["processing"] / "SAIDA" / "relatorio.txt"
     if not report.exists():
         raise RunnerError("Relatorio nao foi gerado pelo modulo.")
-    job.report_path = copy_to(report, paths["result"] / "relatorio.txt")
-    job.result = "Relatorio XML NF-e gerado."
+    report_txt = copy_to(report, paths["result"] / "relatorio.txt")
+    report_html = _text_report_to_html(report_txt, "Relatorio XML NF-e", paths["result"] / "relatorio.html")
+    if is_batch:
+        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
+        job.report_path = job.output_path
+        job.result = f"Relatorio XML NF-e gerado para {count} arquivo(s)."
+    else:
+        job.report_path = report_html
+        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
+        job.result = "Relatorio XML NF-e gerado."
 
 
 def _run_analise_log(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
@@ -165,18 +254,36 @@ def _run_analise_log(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> N
 
 
 def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
-    processing_input = copy_to(uploaded_file, paths["processing"] / "input.xml")
+    processing_input, is_batch, count = _prepare_xml_input(uploaded_file, paths)
+    binary = _local_binary("autoexec_automation", paths["processing"])
+    if is_batch:
+        _run_command(job, paths["log"], [str(binary)], paths["processing"])
+        output_dir = paths["processing"] / "SAIDA"
+        outputs = sorted(output_dir.rglob("*.sql"))
+        if not outputs:
+            raise RunnerError("Nenhum autoexec.sql foi gerado.")
+        package = paths["result"] / "autoexec_resultado.zip"
+        files_to_zip: list[Path] = outputs[:]
+        report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
+        files_to_zip.append(report_html)
+        job.output_path = _zip_files(package, files_to_zip, output_dir)
+        job.report_path = report_html
+        job.result = f"Autoexec gerado para {len(outputs)} de {count} XML(s)."
+        return
+
     _run_command(
         job,
         paths["log"],
-        [str(_binary("autoexec_automation")), "--xml", str(processing_input), "--out", "job"],
+        [str(binary), "--xml", str(processing_input), "--out", "job"],
         paths["processing"],
     )
     output = paths["processing"] / "SAIDA" / "job" / "autoexec.sql"
     if not output.exists():
         raise RunnerError("autoexec.sql nao foi gerado.")
-    job.output_path = copy_to(output, paths["result"] / "autoexec.sql")
-    job.report_path = job.output_path
+    output_sql = copy_to(output, paths["result"] / "autoexec.sql")
+    report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
+    job.output_path = _zip_files(paths["result"] / "autoexec_resultado.zip", [output_sql, report_html])
+    job.report_path = report_html
     job.result = "autoexec.sql gerado."
 
 

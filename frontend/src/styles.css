@@ -88,12 +88,12 @@ button, select {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(340px, 1fr) minmax(240px, 300px);
+  grid-template-columns: minmax(360px, 1fr) minmax(240px, 300px);
   gap: 18px;
   align-items: start;
 }
 
-.module-summary, .result-panel {
+.result-panel {
   border: 1px solid #202020;
   background: #050505;
   border-radius: 8px;
@@ -116,33 +116,9 @@ select {
   padding: 11px;
 }
 
-.section-label {
-  color: #7f8ea2;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.module-info h1 {
-  margin: 10px 0 8px;
-  font-size: 24px;
-  line-height: 1.15;
-}
-
 .result-panel h2 {
   margin: 0 0 8px;
   font-size: 18px;
-}
-
-.module-info p {
-  color: #b5c0ce;
-  line-height: 1.55;
-}
-
-.meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .upload-area {
