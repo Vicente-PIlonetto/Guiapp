@@ -310,6 +310,11 @@ function App() {
                     <Download size={16} /> Baixar relatorio
                   </a>
                 )}
+                {job.has_report_pdf && (
+                  <a href={`${API_BASE}/api/jobs/${job.id}/report.pdf`}>
+                    <Download size={16} /> Baixar PDF
+                  </a>
+                )}
                 {job.has_output && (
                   <a href={`${API_BASE}/api/jobs/${job.id}/output`}>
                     <Download size={16} /> Baixar arquivo

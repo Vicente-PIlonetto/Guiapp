@@ -46,6 +46,7 @@ class Job:
     result: str | None = None
     error: str | None = None
     report_path: Path | None = None
+    report_pdf_path: Path | None = None
     output_path: Path | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -64,6 +65,7 @@ class Job:
             "result": self.result,
             "error": self.error,
             "has_report": bool(self.report_path and self.report_path.exists()),
+            "has_report_pdf": bool(self.report_pdf_path and self.report_pdf_path.exists()),
             "has_output": bool(self.output_path and self.output_path.exists()),
             "created_at": self.created_at,
             "updated_at": self.updated_at,

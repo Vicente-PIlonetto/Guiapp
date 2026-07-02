@@ -104,6 +104,83 @@ def _text_report_to_html(report_path: Path, title: str, output_path: Path) -> Pa
     return output_path
 
 
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _wrap_pdf_line(line: str, width: int = 96) -> list[str]:
+    if not line:
+        return [""]
+    chunks: list[str] = []
+    current = line
+    while len(current) > width:
+        chunks.append(current[:width])
+        current = current[width:]
+    chunks.append(current)
+    return chunks
+
+
+def _text_report_to_pdf(report_path: Path, title: str, output_path: Path) -> Path:
+    raw_lines = report_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines: list[str] = [title, ""]
+    for line in raw_lines:
+        lines.extend(_wrap_pdf_line(line))
+
+    lines_per_page = 54
+    pages = [lines[index:index + lines_per_page] for index in range(0, len(lines), lines_per_page)] or [[]]
+
+    objects: list[bytes] = []
+    catalog_id = 1
+    pages_id = 2
+    font_id = 3
+    page_ids: list[int] = []
+    content_ids: list[int] = []
+
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(b"")
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    for page_lines in pages:
+        page_id = len(objects) + 1
+        content_id = page_id + 1
+        page_ids.append(page_id)
+        content_ids.append(content_id)
+        stream_lines = ["BT", "/F1 10 Tf", "50 790 Td", "14 TL"]
+        for line in page_lines:
+            safe = _pdf_escape(line.encode("latin-1", errors="replace").decode("latin-1"))
+            stream_lines.append(f"({safe}) Tj")
+            stream_lines.append("T*")
+        stream_lines.append("ET")
+        stream = "\n".join(stream_lines).encode("latin-1", errors="replace")
+        objects.append(
+            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")
+        )
+        objects.append(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream")
+
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects[pages_id - 1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
+
+    output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(obj)
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    output_path.write_bytes(output)
+    return output_path
+
+
 def _zip_files(output_path: Path, files: list[Path], base_dir: Path | None = None) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -278,13 +355,15 @@ def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> N
         raise RunnerError("Relatorio nao foi gerado pelo modulo.")
     report_txt = copy_to(report, paths["result"] / "relatorio.txt")
     report_html = _text_report_to_html(report_txt, "Relatorio XML NF-e", paths["result"] / "relatorio.html")
+    report_pdf = _text_report_to_pdf(report_txt, "Relatorio XML NF-e", paths["result"] / "relatorio.pdf")
+    job.report_pdf_path = report_pdf
     if is_batch:
-        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
+        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html, report_pdf])
         job.report_path = job.output_path
         job.result = f"Relatorio XML NF-e gerado para {count} arquivo(s)."
     else:
         job.report_path = report_html
-        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
+        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html, report_pdf])
         job.result = "Relatorio XML NF-e gerado."
 
 
@@ -310,9 +389,12 @@ def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None
         package = paths["result"] / "autoexec_resultado.zip"
         files_to_zip: list[Path] = outputs[:]
         report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
+        report_pdf = _text_report_to_pdf(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.pdf")
         files_to_zip.append(report_html)
+        files_to_zip.append(report_pdf)
         job.output_path = _zip_files(package, files_to_zip, output_dir)
         job.report_path = report_html
+        job.report_pdf_path = report_pdf
         job.result = f"Autoexec gerado para {len(outputs)} de {count} XML(s)."
         return
 
@@ -327,8 +409,10 @@ def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None
         raise RunnerError("autoexec.sql nao foi gerado.")
     output_sql = copy_to(output, paths["result"] / "autoexec.sql")
     report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
-    job.output_path = _zip_files(paths["result"] / "autoexec_resultado.zip", [output_sql, report_html])
+    report_pdf = _text_report_to_pdf(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.pdf")
+    job.output_path = _zip_files(paths["result"] / "autoexec_resultado.zip", [output_sql, report_html, report_pdf])
     job.report_path = report_html
+    job.report_pdf_path = report_pdf
     job.result = "autoexec.sql gerado."
 
 
