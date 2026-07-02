@@ -13,6 +13,13 @@ def ensure_storage() -> None:
         (base / name).mkdir(parents=True, exist_ok=True)
 
 
+def cleanup_startup_storage() -> None:
+    base = get_settings().storage_path
+    for name in ("uploads", "processing", "backups", "results"):
+        shutil.rmtree(base / name, ignore_errors=True)
+    ensure_storage()
+
+
 def safe_display_name(filename: str) -> str:
     name = Path(filename or "upload.bin").name
     cleaned = SAFE_NAME_RE.sub("_", name).strip("._")

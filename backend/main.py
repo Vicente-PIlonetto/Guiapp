@@ -16,7 +16,7 @@ from backend.job_store import add_job, get_job
 from backend.models import Job
 from backend.module_registry import get_module, list_modules
 from backend.runners import run_job
-from backend.storage import ensure_storage, job_dirs, safe_display_name
+from backend.storage import cleanup_startup_storage, ensure_storage, job_dirs, safe_display_name
 
 app = FastAPI(title="GUINAPP", version="0.1.0")
 app.add_middleware(
@@ -39,7 +39,7 @@ UPLOAD_TTL_SECONDS = 5 * 60
 
 @app.on_event("startup")
 def startup() -> None:
-    ensure_storage()
+    cleanup_startup_storage()
 
 
 @app.get("/api/health")
