@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from backend.config import get_settings
 from backend.job_store import add_job, get_job
@@ -70,6 +71,13 @@ def upload_dir(upload_id: str) -> Path:
 async def cleanup_upload_later(upload_id: str) -> None:
     await asyncio.sleep(UPLOAD_TTL_SECONDS)
     shutil.rmtree(upload_dir(upload_id), ignore_errors=True)
+
+
+def cleanup_job_artifacts(job_id: str) -> None:
+    base = get_settings().storage_path
+    for folder in ("uploads", "processing", "backups", "results"):
+        shutil.rmtree(base / folder / job_id, ignore_errors=True)
+    (base / "logs" / f"{job_id}.log").unlink(missing_ok=True)
 
 
 def validate_upload(module_id: str, filename: str) -> tuple[str, str]:
@@ -276,7 +284,9 @@ def download_report(job_id: str) -> FileResponse:
     job = get_job(job_id)
     if not job or not job.report_path or not job.report_path.exists():
         raise HTTPException(status_code=404, detail="Relatorio nao encontrado.")
-    return FileResponse(job.report_path, filename=job.report_path.name)
+    cleanup_after = not job.output_path or job.output_path == job.report_path
+    background = BackgroundTask(cleanup_job_artifacts, job_id) if cleanup_after else None
+    return FileResponse(job.report_path, filename=job.report_path.name, background=background)
 
 
 @app.get("/api/jobs/{job_id}/output")
@@ -284,7 +294,11 @@ def download_output(job_id: str) -> FileResponse:
     job = get_job(job_id)
     if not job or not job.output_path or not job.output_path.exists():
         raise HTTPException(status_code=404, detail="Arquivo de saida nao encontrado.")
-    return FileResponse(job.output_path, filename=job.output_path.name)
+    return FileResponse(
+        job.output_path,
+        filename=job.output_path.name,
+        background=BackgroundTask(cleanup_job_artifacts, job_id),
+    )
 
 
 def frontend_dist_path() -> Path | None:

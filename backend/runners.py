@@ -118,38 +118,83 @@ def _zip_files(output_path: Path, files: list[Path], base_dir: Path | None = Non
     return output_path
 
 
-def _extract_xml_zip(zip_path: Path, target_dir: Path) -> list[Path]:
-    xml_dir = target_dir / "xmls"
-    xml_dir.mkdir(parents=True, exist_ok=True)
-    extracted: list[Path] = []
-    with zipfile.ZipFile(zip_path) as archive:
+def _extract_zip_members(archive_path: Path, raw_dir: Path) -> None:
+    with zipfile.ZipFile(archive_path) as archive:
         for member in archive.infolist():
             member_name = member.filename.replace("\\", "/")
-            if member.is_dir() or not member_name.lower().endswith(".xml"):
+            if member.is_dir() or member_name.startswith("/") or ".." in Path(member_name).parts:
                 continue
-            source_name = Path(member_name).name
-            if not source_name:
-                continue
-            target = xml_dir / source_name
-            counter = 2
-            while target.exists():
-                target = xml_dir / f"{Path(source_name).stem}_{counter}{Path(source_name).suffix}"
-                counter += 1
+            target = raw_dir / member_name
+            target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, target.open("wb") as destination:
                 shutil.copyfileobj(source, destination)
-            extracted.append(target)
+
+
+def _extract_rar_members(archive_path: Path, raw_dir: Path) -> None:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    unrar = shutil.which("unrar")
+    seven_zip = shutil.which("7z") or shutil.which("7zz")
+    bsdtar = shutil.which("bsdtar")
+    if unrar:
+        subprocess.run([unrar, "x", "-idq", "-o+", str(archive_path), str(raw_dir)], check=True)
+        return
+    if seven_zip:
+        subprocess.run([seven_zip, "x", "-y", f"-o{raw_dir}", str(archive_path)], check=True)
+        return
+    if bsdtar:
+        subprocess.run([bsdtar, "-xf", str(archive_path), "-C", str(raw_dir)], check=True)
+        return
+    raise RunnerError("Arquivo .rar requer unrar, 7z/7zz ou bsdtar instalado no servidor.")
+
+
+def _extract_archive_files(archive_path: Path, target_dir: Path, extension: str, output_name: str) -> list[Path]:
+    raw_dir = target_dir / "archive_raw"
+    output_dir = target_dir / output_name
+    shutil.rmtree(raw_dir, ignore_errors=True)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = archive_path.suffix.lower()
+    if suffix == ".zip":
+        _extract_zip_members(archive_path, raw_dir)
+    elif suffix == ".rar":
+        _extract_rar_members(archive_path, raw_dir)
+    else:
+        raise RunnerError(f"Arquivo compactado nao suportado: {suffix}")
+
+    extracted: list[Path] = []
+    for source in sorted(raw_dir.rglob(f"*{extension}")):
+        if not source.is_file() or source.suffix.lower() != extension:
+            continue
+        target = output_dir / source.name
+        counter = 2
+        while target.exists():
+            target = output_dir / f"{source.stem}_{counter}{source.suffix}"
+            counter += 1
+        copy_to(source, target)
+        extracted.append(target)
     if not extracted:
-        raise RunnerError("Nenhum XML encontrado no arquivo ZIP.")
+        raise RunnerError(f"Nenhum arquivo {extension} encontrado no compactado.")
     return extracted
 
 
 def _prepare_xml_input(uploaded_file: Path, paths: dict[str, Path]) -> tuple[Path, bool, int]:
-    if uploaded_file.suffix.lower() == ".zip":
-        extracted = _extract_xml_zip(uploaded_file, paths["processing"])
+    if uploaded_file.suffix.lower() in {".zip", ".rar"}:
+        extracted = _extract_archive_files(uploaded_file, paths["processing"], ".xml", "xmls")
         return paths["processing"] / "xmls", True, len(extracted)
     suffix = uploaded_file.suffix.lower() or ".xml"
     processing_input = copy_to(uploaded_file, paths["processing"] / f"input{suffix}")
     return processing_input, False, 1
+
+
+def _prepare_fdb_input(uploaded_file: Path, paths: dict[str, Path]) -> Path:
+    if uploaded_file.suffix.lower() in {".zip", ".rar"}:
+        extracted = _extract_archive_files(uploaded_file, paths["processing"], ".fdb", "fdb")
+        if len(extracted) > 1:
+            raise RunnerError("Compactado contem mais de uma base .fdb. Envie apenas uma base por reparo.")
+        return extracted[0]
+    return uploaded_file
 
 
 def _firebird_binary(setting_value: str, binary_name: str) -> str | None:
@@ -303,8 +348,9 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     firebird_env = _firebird_env(gfix)
     _append_log(job, paths["log"], f"FIREBIRD={firebird_env['FIREBIRD']}")
 
-    working = copy_to(uploaded_file, paths["processing"] / "working.fdb")
-    backup_original = copy_to(uploaded_file, paths["backup"] / "original.fdb")
+    repair_input = _prepare_fdb_input(uploaded_file, paths)
+    working = copy_to(repair_input, paths["processing"] / "working.fdb")
+    backup_original = copy_to(repair_input, paths["backup"] / "original.fdb")
     backup_file = paths["processing"] / "repair.fbk"
     repaired = paths["result"] / "repaired.fdb"
 
