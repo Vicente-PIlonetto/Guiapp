@@ -70,6 +70,15 @@ Backend:
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
+Servidor com Tailscale Funnel:
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+O `start.sh` carrega `.env`, ativa `.venv`, configura o Tailscale Funnel e roda o `uvicorn` como processo principal. Para parar, use `Ctrl+C`.
+
 Frontend em desenvolvimento:
 
 ```bash
