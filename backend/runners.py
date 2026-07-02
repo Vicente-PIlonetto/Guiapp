@@ -495,10 +495,7 @@ def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None
         if not outputs:
             raise RunnerError("Nenhum autoexec.sql foi gerado.")
         package = paths["result"] / "autoexec_resultado.zip"
-        files_to_zip: list[Path] = outputs[:]
-        report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
-        files_to_zip.append(report_html)
-        job.output_path = _zip_files(package, files_to_zip, output_dir)
+        job.output_path = _zip_files(package, outputs, output_dir)
         job.result = f"Autoexec gerado para {len(outputs)} de {count} XML(s)."
         return
 
@@ -512,8 +509,7 @@ def _run_autoexec(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None
     if not output.exists():
         raise RunnerError("autoexec.sql nao foi gerado.")
     output_sql = copy_to(output, paths["result"] / "autoexec.sql")
-    report_html = _text_report_to_html(paths["log"], "Relatorio Autoexec", paths["result"] / "relatorio.html")
-    job.output_path = _zip_files(paths["result"] / "autoexec_resultado.zip", [output_sql, report_html])
+    job.output_path = _zip_files(paths["result"] / "autoexec_resultado.zip", [output_sql])
     job.result = "autoexec.sql gerado."
 
 

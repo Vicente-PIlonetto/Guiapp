@@ -30,7 +30,7 @@ MODULES: dict[str, ModuleDefinition] = {
         operation_type="correction",
         accepted_extensions=(".xml", ".zip", ".rar"),
         requires_confirmation=False,
-        generates_report=True,
+        generates_report=False,
         generates_output_file=True,
         runner="autoexec_automation",
     ),
