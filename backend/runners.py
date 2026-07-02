@@ -3,6 +3,7 @@ import html
 import os
 import shutil
 import subprocess
+import textwrap
 import zipfile
 
 from backend.config import get_settings
@@ -101,6 +102,69 @@ def _text_report_to_html(report_path: Path, title: str, output_path: Path) -> Pa
 </html>
 """
     output_path.write_text(document, encoding="utf-8")
+    return output_path
+
+
+def _pdf_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _text_report_to_pdf(report_path: Path, title: str, output_path: Path) -> Path:
+    content = report_path.read_text(encoding="utf-8", errors="replace")
+    lines: list[str] = [title, ""]
+    for original_line in content.splitlines():
+        wrapped = textwrap.wrap(original_line, width=94, replace_whitespace=False, drop_whitespace=False)
+        lines.extend(wrapped or [""])
+
+    lines_per_page = 46
+    pages = [lines[index:index + lines_per_page] for index in range(0, len(lines), lines_per_page)] or [[]]
+    objects: list[bytes] = []
+
+    def add_object(payload: bytes) -> int:
+        objects.append(payload)
+        return len(objects)
+
+    add_object(b"<< /Type /Catalog /Pages 2 0 R >>")
+    add_object(b"")
+    font_id = add_object(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>")
+    page_ids: list[int] = []
+
+    for page_lines in pages:
+        commands = ["BT", f"/F1 10 Tf", "50 790 Td", "14 TL"]
+        for line in page_lines:
+            safe_line = line.encode("cp1252", errors="replace").decode("cp1252")
+            commands.append(f"({_pdf_escape(safe_line)}) Tj")
+            commands.append("T*")
+        commands.append("ET")
+        stream = "\n".join(commands).encode("cp1252", errors="replace")
+        content_id = add_object(b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream")
+        page_id = add_object(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii")
+        )
+        page_ids.append(page_id)
+
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("wb") as handle:
+        handle.write(b"%PDF-1.4\n")
+        offsets = [0]
+        for index, payload in enumerate(objects, start=1):
+            offsets.append(handle.tell())
+            handle.write(f"{index} 0 obj\n".encode("ascii"))
+            handle.write(payload)
+            handle.write(b"\nendobj\n")
+        xref_offset = handle.tell()
+        handle.write(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+        handle.write(b"0000000000 65535 f \n")
+        for offset in offsets[1:]:
+            handle.write(f"{offset:010d} 00000 n \n".encode("ascii"))
+        handle.write(
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+        )
     return output_path
 
 
@@ -403,7 +467,8 @@ def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> N
     if not report.exists():
         raise RunnerError("Relatorio nao foi gerado pelo modulo.")
     report_txt = copy_to(report, paths["result"] / "relatorio.txt")
-    job.report_path = report_txt
+    job.report_path = _text_report_to_pdf(report_txt, "Relatorio XML NF-e", paths["result"] / "relatorio.pdf")
+    report_txt.unlink(missing_ok=True)
     if is_batch:
         job.result = f"Relatorio XML NF-e gerado para {count} arquivo(s)."
     else:
