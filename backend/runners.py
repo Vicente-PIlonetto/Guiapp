@@ -195,7 +195,7 @@ def _extract_archive_files(archive_path: Path, target_dir: Path, extension: str,
     _extract_nested_archives(raw_dir)
 
     extracted: list[Path] = []
-    for source in sorted(raw_dir.rglob(f"*{extension}")):
+    for source in sorted(raw_dir.rglob("*")):
         if not source.is_file() or source.suffix.lower() != extension:
             continue
         target = output_dir / source.name
