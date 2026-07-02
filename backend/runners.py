@@ -38,11 +38,13 @@ def _run_command(
     args: list[str],
     cwd: Path,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     _append_log(job, log_path, f"$ {_format_args(args)}")
     completed = subprocess.run(
         args,
         cwd=str(cwd),
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -90,6 +92,15 @@ def _firebird_binary(setting_value: str, binary_name: str) -> str | None:
         if candidate.exists():
             return str(candidate)
     return None
+
+
+def _firebird_env(binary_path: str) -> dict[str, str]:
+    env = os.environ.copy()
+    firebird_root = Path(binary_path).resolve().parent.parent
+    lib_path = firebird_root / "lib"
+    env["FIREBIRD"] = str(firebird_root)
+    env["LD_LIBRARY_PATH"] = f"{lib_path}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+    return env
 
 
 def _raise_firebird_ods_error(completed: subprocess.CompletedProcess[str]) -> None:
@@ -182,6 +193,8 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     job.report_path = paths["log"]
     _append_log(job, paths["log"], f"Usando gfix: {gfix}")
     _append_log(job, paths["log"], f"Usando gbak: {gbak}")
+    firebird_env = _firebird_env(gfix)
+    _append_log(job, paths["log"], f"FIREBIRD={firebird_env['FIREBIRD']}")
 
     working = copy_to(uploaded_file, paths["processing"] / "working.fdb")
     backup_original = copy_to(uploaded_file, paths["backup"] / "original.fdb")
@@ -191,16 +204,30 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     _append_log(job, paths["log"], f"Backup original criado: {backup_original.name}")
     auth = ["-user", settings.firebird_user, "-password", settings.firebird_password]
 
-    validate = _run_command(job, paths["log"], [gfix, *auth, "-validate", str(working)], paths["processing"], check=False)
+    validate = _run_command(
+        job,
+        paths["log"],
+        [gfix, *auth, "-validate", str(working)],
+        paths["processing"],
+        check=False,
+        env=firebird_env,
+    )
     _raise_firebird_ods_error(validate)
     if validate.returncode != 0:
         _append_log(job, paths["log"], "Validacao retornou erro; tentando reparo com gfix -mend.")
-    mend = _run_command(job, paths["log"], [gfix, *auth, "-mend", "-full", "-ignore", str(working)], paths["processing"], check=False)
+    mend = _run_command(
+        job,
+        paths["log"],
+        [gfix, *auth, "-mend", "-full", "-ignore", str(working)],
+        paths["processing"],
+        check=False,
+        env=firebird_env,
+    )
     _raise_firebird_ods_error(mend)
     if mend.returncode != 0:
         raise RunnerError(f"Comando falhou com codigo {mend.returncode}.")
-    _run_command(job, paths["log"], [gbak, *auth, "-b", "-g", "-ignore", str(working), str(backup_file)], paths["processing"])
-    _run_command(job, paths["log"], [gbak, *auth, "-c", str(backup_file), str(repaired)], paths["processing"])
+    _run_command(job, paths["log"], [gbak, *auth, "-b", "-g", "-ignore", str(working), str(backup_file)], paths["processing"], env=firebird_env)
+    _run_command(job, paths["log"], [gbak, *auth, "-c", str(backup_file), str(repaired)], paths["processing"], env=firebird_env)
 
     if not repaired.exists():
         raise RunnerError("Base reparada nao foi gerada.")
