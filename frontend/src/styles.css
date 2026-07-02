@@ -232,7 +232,7 @@ select {
   align-items: center;
   gap: 10px;
   border: 1px solid #5b4516;
-  background: #090700;
+  background: transparent;
   color: #f3d38b;
   border-radius: 8px;
   padding: 12px;
@@ -242,7 +242,7 @@ select {
 
 .alert {
   border-color: #693036;
-  background: #0b0304;
+  background: transparent;
   color: #ffb7bd;
 }
 
@@ -253,7 +253,7 @@ select {
   margin: 8px 0 10px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #080808;
+  background: transparent;
   color: #bec8d6;
 }
 
