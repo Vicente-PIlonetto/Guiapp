@@ -147,6 +147,42 @@ def _extract_rar_members(archive_path: Path, raw_dir: Path) -> None:
     raise RunnerError("Arquivo .rar requer unrar, 7z/7zz ou bsdtar instalado no servidor.")
 
 
+def _extract_archive_once(archive_path: Path, raw_dir: Path) -> None:
+    suffix = archive_path.suffix.lower()
+    if suffix == ".zip":
+        _extract_zip_members(archive_path, raw_dir)
+    elif suffix == ".rar":
+        _extract_rar_members(archive_path, raw_dir)
+    else:
+        raise RunnerError(f"Arquivo compactado nao suportado: {suffix}")
+
+
+def _extract_nested_archives(raw_dir: Path, max_depth: int = 4) -> None:
+    processed: set[Path] = set()
+    for depth in range(max_depth):
+        archives = [
+            path for path in sorted(raw_dir.rglob("*"))
+            if path.is_file() and path.suffix.lower() in {".zip", ".rar"} and path not in processed
+        ]
+        if not archives:
+            return
+        for archive in archives:
+            processed.add(archive)
+            nested_dir = archive.with_suffix(f"{archive.suffix}.extracted")
+            shutil.rmtree(nested_dir, ignore_errors=True)
+            nested_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                _extract_archive_once(archive, nested_dir)
+            except Exception as exc:
+                raise RunnerError(f"Falha ao extrair compactado interno {archive.name}: {exc}") from exc
+    remaining = [
+        path.name for path in raw_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".zip", ".rar"} and path not in processed
+    ]
+    if remaining:
+        raise RunnerError("Compactado possui aninhamento excessivo. Recompacte os arquivos com menos niveis.")
+
+
 def _extract_archive_files(archive_path: Path, target_dir: Path, extension: str, output_name: str) -> list[Path]:
     raw_dir = target_dir / "archive_raw"
     output_dir = target_dir / output_name
@@ -155,13 +191,8 @@ def _extract_archive_files(archive_path: Path, target_dir: Path, extension: str,
     raw_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix = archive_path.suffix.lower()
-    if suffix == ".zip":
-        _extract_zip_members(archive_path, raw_dir)
-    elif suffix == ".rar":
-        _extract_rar_members(archive_path, raw_dir)
-    else:
-        raise RunnerError(f"Arquivo compactado nao suportado: {suffix}")
+    _extract_archive_once(archive_path, raw_dir)
+    _extract_nested_archives(raw_dir)
 
     extracted: list[Path] = []
     for source in sorted(raw_dir.rglob(f"*{extension}")):
