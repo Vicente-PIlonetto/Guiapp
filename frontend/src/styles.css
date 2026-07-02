@@ -23,7 +23,7 @@ button, select {
 .shell {
   width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 28px 0;
+  padding: 34px 0;
 }
 
 .topbar {
@@ -52,7 +52,7 @@ button, select {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 4px 0 14px;
+  padding: 0 0 14px;
   margin-bottom: 8px;
   scrollbar-width: thin;
 }
@@ -127,15 +127,15 @@ select {
 }
 
 .dropzone {
-  min-height: 390px;
+  min-height: 320px;
   border: 1px dashed #333;
-  background: #030303;
+  background: transparent;
   border-radius: 8px;
   display: grid;
   place-items: center;
   align-content: center;
   text-align: center;
-  padding: 28px;
+  padding: 24px;
   cursor: pointer;
   transition: border-color 160ms ease, background 160ms ease;
 }
@@ -146,15 +146,16 @@ select {
 }
 
 .dropzone h1 {
-  font-size: clamp(24px, 4vw, 42px);
-  line-height: 1.1;
-  margin: 16px 0 8px;
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 0 0 10px;
   max-width: 680px;
   overflow-wrap: anywhere;
 }
 
 .dropzone p {
   color: #96a4b5;
+  margin: 6px 0;
 }
 
 .upload-progress {

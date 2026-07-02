@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, Download, FileUp, Loader2, Play, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Loader2, Play, ShieldAlert } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || window.location.origin).replace(/\/$/, '');
@@ -195,13 +195,6 @@ function App() {
 
   return (
     <main className="shell">
-      <header className="topbar">
-        <div>
-          <p>Analise, validacao e reparo modular de arquivos.</p>
-        </div>
-        <div className="status-pill">API {API_BASE}</div>
-      </header>
-
       <nav className="module-tabs" aria-label="Modulos">
         {modules.map((item) => (
           <button
@@ -210,7 +203,7 @@ function App() {
             className={`module-tab ${item.id === moduleId ? 'active' : ''}`}
             disabled={!item.enabled}
             onClick={() => selectModule(item.id)}
-            title={item.disabled_reason || item.description}
+            title={item.disabled_reason || item.name}
           >
             <span>{item.name}</span>
           </button>
@@ -229,14 +222,12 @@ function App() {
             onDrop={onDrop}
             onClick={() => inputRef.current?.click()}
           >
-            <FileUp size={40} />
-            <h1>{file ? file.name : 'Envie um arquivo para iniciar'}</h1>
+            <h1>{file ? file.name : 'Selecionar arquivo'}</h1>
             <p>
               {selectedModule
                 ? `Aceito: ${selectedModule.accepted_extensions.join(', ')}`
                 : 'Selecione um modulo'}
             </p>
-            {selectedModule?.description && <p>{selectedModule.description}</p>}
             {config && <p>Limite: {config.max_upload_gb} GB</p>}
             <button type="button" className="secondary">Selecionar arquivo</button>
             <input
