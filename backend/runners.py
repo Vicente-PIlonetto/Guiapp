@@ -255,9 +255,23 @@ def _firebird_env(binary_path: str) -> dict[str, str]:
     env = os.environ.copy()
     firebird_root = Path(binary_path).resolve().parent.parent
     lib_path = firebird_root / "lib"
+    bin_path = firebird_root / "bin"
     env["FIREBIRD"] = str(firebird_root)
     env["LD_LIBRARY_PATH"] = f"{lib_path}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+    env["PATH"] = f"{bin_path}:{env.get('PATH', '')}".rstrip(":")
     return env
+
+
+def _configure_firebird_runtime(env: dict[str, str], paths: dict[str, Path]) -> None:
+    runtime_dir = paths["processing"] / "firebird_runtime"
+    lock_dir = runtime_dir / "lock"
+    tmp_dir = runtime_dir / "tmp"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    env["FIREBIRD_LOCK"] = str(lock_dir)
+    env["TMPDIR"] = str(tmp_dir)
+    env["TEMP"] = str(tmp_dir)
+    env["TMP"] = str(tmp_dir)
 
 
 def _raise_firebird_ods_error(completed: subprocess.CompletedProcess[str]) -> None:
@@ -269,6 +283,50 @@ def _raise_firebird_ods_error(completed: subprocess.CompletedProcess[str]) -> No
     raise RunnerError(
         f"{detail}. Instale ou configure GFIX_BIN/GBAK_BIN de uma versao Firebird compativel com a ODS da base."
     )
+
+
+def _restore_firebird_backup(
+    job: Job,
+    gbak: str,
+    auth: list[str],
+    backup_file: Path,
+    restored_working: Path,
+    paths: dict[str, Path],
+    env: dict[str, str],
+) -> None:
+    restored_working.unlink(missing_ok=True)
+    restore = _run_command(
+        job,
+        paths["log"],
+        [gbak, *auth, "-c", "-v", str(backup_file), str(restored_working)],
+        paths["processing"],
+        check=False,
+        env=env,
+    )
+    if restore.returncode == 0 and restored_working.exists():
+        return
+
+    restored_working.unlink(missing_ok=True)
+    _append_log(job, paths["log"], "Restore com autenticacao falhou; tentando restore local sem usuario/senha.")
+    fallback = _run_command(
+        job,
+        paths["log"],
+        [gbak, "-c", "-v", str(backup_file), str(restored_working)],
+        paths["processing"],
+        check=False,
+        env=env,
+    )
+    if fallback.returncode == 0 and restored_working.exists():
+        return
+
+    code = restore.returncode if restore.returncode != 0 else fallback.returncode
+    if code < 0:
+        signal_number = abs(code)
+        raise RunnerError(
+            f"gbak encerrou por sinal {signal_number} durante o restore. "
+            "Verifique as bibliotecas/dependencias do Firebird 2.5 no servidor."
+        )
+    raise RunnerError(f"Comando falhou com codigo {code}.")
 
 
 def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
@@ -373,12 +431,14 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     _append_log(job, paths["log"], f"Usando gfix: {gfix}")
     _append_log(job, paths["log"], f"Usando gbak: {gbak}")
     firebird_env = _firebird_env(gfix)
+    _configure_firebird_runtime(firebird_env, paths)
     _append_log(job, paths["log"], f"FIREBIRD={firebird_env['FIREBIRD']}")
 
     repair_input = _prepare_fdb_input(uploaded_file, paths)
     working = copy_to(repair_input, paths["processing"] / "working.fdb")
     backup_original = copy_to(repair_input, paths["backup"] / "original.fdb")
     backup_file = paths["processing"] / "repair.fbk"
+    restored_working = paths["processing"] / "repaired.fdb"
     repaired = paths["result"] / "repaired.fdb"
 
     _append_log(job, paths["log"], f"Backup original criado: {backup_original.name}")
@@ -407,7 +467,8 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     if mend.returncode != 0:
         raise RunnerError(f"Comando falhou com codigo {mend.returncode}.")
     _run_command(job, paths["log"], [gbak, *auth, "-b", "-g", "-ignore", str(working), str(backup_file)], paths["processing"], env=firebird_env)
-    _run_command(job, paths["log"], [gbak, *auth, "-c", str(backup_file), str(repaired)], paths["processing"], env=firebird_env)
+    _restore_firebird_backup(job, gbak, auth, backup_file, restored_working, paths, firebird_env)
+    copy_to(restored_working, repaired)
 
     if not repaired.exists():
         raise RunnerError("Base reparada nao foi gerada.")
