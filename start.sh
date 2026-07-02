@@ -23,7 +23,9 @@ if [ -d "/opt/firebird251/root/opt/firebird" ]; then
   export LD_LIBRARY_PATH="$FIREBIRD/lib:${LD_LIBRARY_PATH:-}"
 fi
 
-if command -v tailscale >/dev/null 2>&1; then
+if [ "${NO_TAILSCALE_SETUP:-0}" = "1" ]; then
+  echo "Configuracao do Tailscale ignorada neste processo."
+elif command -v tailscale >/dev/null 2>&1; then
   echo "Configurando Tailscale Funnel na porta $PORT..."
   sudo tailscale funnel reset >/dev/null 2>&1 || true
   sudo tailscale funnel --bg --yes --https=443 "http://127.0.0.1:$PORT"
