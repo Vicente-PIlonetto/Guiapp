@@ -510,6 +510,8 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
 
     if not repaired.exists():
         raise RunnerError("Base reparada nao foi gerada.")
-    job.output_path = repaired
+    package = _zip_files(paths["result"] / "reparo_firebird_resultado.zip", [repaired])
+    repaired.unlink(missing_ok=True)
+    job.output_path = package
     job.report_path = paths["log"]
     job.result = "Base Firebird reparada em copia isolada."
