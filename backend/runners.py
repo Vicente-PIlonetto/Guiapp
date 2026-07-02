@@ -118,6 +118,13 @@ def _zip_files(output_path: Path, files: list[Path], base_dir: Path | None = Non
     return output_path
 
 
+def _cleanup_transient_paths(paths: dict[str, Path], include_result: bool = False) -> None:
+    for key in ("upload", "processing", "backup"):
+        shutil.rmtree(paths[key], ignore_errors=True)
+    if include_result:
+        shutil.rmtree(paths["result"], ignore_errors=True)
+
+
 def _extract_zip_members(archive_path: Path, raw_dir: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         for member in archive.infolist():
@@ -207,6 +214,7 @@ def _extract_archive_files(archive_path: Path, target_dir: Path, extension: str,
         extracted.append(target)
     if not extracted:
         raise RunnerError(f"Nenhum arquivo {extension} encontrado no compactado.")
+    shutil.rmtree(raw_dir, ignore_errors=True)
     return extracted
 
 
@@ -285,6 +293,31 @@ def _raise_firebird_ods_error(completed: subprocess.CompletedProcess[str]) -> No
     )
 
 
+def _raise_no_space_error(completed: subprocess.CompletedProcess[str], target_path: Path) -> None:
+    output = (completed.stdout or "").lower()
+    if "no space left on device" not in output:
+        return
+    usage = shutil.disk_usage(target_path.parent)
+    free_gb = usage.free / (1024 ** 3)
+    raise RunnerError(
+        f"Espaco insuficiente no servidor para gerar a base reparada. "
+        f"Livre em {target_path.parent}: {free_gb:.2f} GB."
+    )
+
+
+def _ensure_restore_space(source_database: Path, target_path: Path) -> None:
+    usage = shutil.disk_usage(target_path.parent)
+    required = int(source_database.stat().st_size * 1.25) + (512 * 1024 * 1024)
+    if usage.free >= required:
+        return
+    free_gb = usage.free / (1024 ** 3)
+    required_gb = required / (1024 ** 3)
+    raise RunnerError(
+        f"Espaco insuficiente no servidor antes do restore. "
+        f"Livre: {free_gb:.2f} GB; recomendado: {required_gb:.2f} GB."
+    )
+
+
 def _restore_firebird_backup(
     job: Job,
     gbak: str,
@@ -305,6 +338,7 @@ def _restore_firebird_backup(
     )
     if restore.returncode == 0 and restored_working.exists():
         return
+    _raise_no_space_error(restore, restored_working)
 
     restored_working.unlink(missing_ok=True)
     _append_log(job, paths["log"], "Restore com autenticacao falhou; tentando restore local sem usuario/senha.")
@@ -318,6 +352,7 @@ def _restore_firebird_backup(
     )
     if fallback.returncode == 0 and restored_working.exists():
         return
+    _raise_no_space_error(fallback, restored_working)
 
     code = restore.returncode if restore.returncode != 0 else fallback.returncode
     if code < 0:
@@ -349,12 +384,14 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
         if not job.result:
             job.result = "Processamento concluido."
         _append_log(job, log_path, "Job concluido.")
+        _cleanup_transient_paths(paths)
     except Exception as exc:
         job.status = "error"
         job.error = str(exc)
-        if not job.report_path and log_path.exists():
+        if log_path.exists():
             job.report_path = log_path
         _append_log(job, log_path, f"ERRO: {exc}")
+        _cleanup_transient_paths(paths, include_result=True)
     finally:
         shutil.rmtree(paths["upload"], ignore_errors=True)
 
@@ -436,12 +473,13 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
 
     repair_input = _prepare_fdb_input(uploaded_file, paths)
     working = copy_to(repair_input, paths["processing"] / "working.fdb")
-    backup_original = copy_to(repair_input, paths["backup"] / "original.fdb")
+    if repair_input != uploaded_file and paths["processing"].resolve() in repair_input.resolve().parents:
+        shutil.rmtree(repair_input.parent, ignore_errors=True)
+    uploaded_file.unlink(missing_ok=True)
     backup_file = paths["processing"] / "repair.fbk"
-    restored_working = paths["processing"] / "repaired.fdb"
     repaired = paths["result"] / "repaired.fdb"
 
-    _append_log(job, paths["log"], f"Backup original criado: {backup_original.name}")
+    _append_log(job, paths["log"], f"Copia de trabalho isolada criada: {working.name}")
     auth = ["-user", settings.firebird_user, "-password", settings.firebird_password]
 
     validate = _run_command(
@@ -467,8 +505,8 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     if mend.returncode != 0:
         raise RunnerError(f"Comando falhou com codigo {mend.returncode}.")
     _run_command(job, paths["log"], [gbak, *auth, "-b", "-g", "-ignore", str(working), str(backup_file)], paths["processing"], env=firebird_env)
-    _restore_firebird_backup(job, gbak, auth, backup_file, restored_working, paths, firebird_env)
-    copy_to(restored_working, repaired)
+    _ensure_restore_space(working, repaired)
+    _restore_firebird_backup(job, gbak, auth, backup_file, repaired, paths, firebird_env)
 
     if not repaired.exists():
         raise RunnerError("Base reparada nao foi gerada.")
