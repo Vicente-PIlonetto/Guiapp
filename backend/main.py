@@ -289,16 +289,6 @@ def download_report(job_id: str) -> FileResponse:
     return FileResponse(job.report_path, filename=job.report_path.name, background=background)
 
 
-@app.get("/api/jobs/{job_id}/report.pdf")
-def download_report_pdf(job_id: str) -> FileResponse:
-    job = get_job(job_id)
-    if not job or not job.report_pdf_path or not job.report_pdf_path.exists():
-        raise HTTPException(status_code=404, detail="Relatorio PDF nao encontrado.")
-    cleanup_after = not job.output_path
-    background = BackgroundTask(cleanup_job_artifacts, job_id) if cleanup_after else None
-    return FileResponse(job.report_pdf_path, filename=job.report_pdf_path.name, media_type="application/pdf", background=background)
-
-
 @app.get("/api/jobs/{job_id}/output")
 def download_output(job_id: str) -> FileResponse:
     job = get_job(job_id)
