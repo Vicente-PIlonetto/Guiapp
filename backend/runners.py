@@ -403,12 +403,10 @@ def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> N
     if not report.exists():
         raise RunnerError("Relatorio nao foi gerado pelo modulo.")
     report_txt = copy_to(report, paths["result"] / "relatorio.txt")
-    report_html = _text_report_to_html(report_txt, "Relatorio XML NF-e", paths["result"] / "relatorio.html")
+    job.report_path = report_txt
     if is_batch:
-        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
         job.result = f"Relatorio XML NF-e gerado para {count} arquivo(s)."
     else:
-        job.output_path = _zip_files(paths["result"] / "analise_xml_nfe_resultado.zip", [report_txt, report_html])
         job.result = "Relatorio XML NF-e gerado."
 
 
