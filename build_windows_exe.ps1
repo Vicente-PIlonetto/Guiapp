@@ -58,11 +58,13 @@ if (Get-Command gcc -ErrorAction SilentlyContinue) {
     gcc "modules\Analise_xml\src\main.c" -o "modules\build\analise_xml_nfe.exe"
     gcc "modules\Analise_LogNFSE\src\main.c" -o "modules\build\analise_log_nfse.exe"
     gcc "modules\Autoexec_automation\src\generator.c" -o "modules\build\autoexec_automation.exe"
+    gcc "modules\analise_xml_nfce\src\main.c" -o "modules\build\analise_xml_nfce.exe"
 } else {
     Write-Warning "gcc nao encontrado. Copiando binarios Windows existentes quando disponiveis."
     Copy-Item "modules\Analise_xml\src\main.exe" "modules\build\analise_xml_nfe.exe" -Force
     Copy-Item "modules\Analise_LogNFSE\src\main.exe" "modules\build\analise_log_nfse.exe" -Force
     Copy-Item "modules\Autoexec_automation\src\generator.exe" "modules\build\autoexec_automation.exe" -Force
+    Write-Warning "Nenhum binario historico para analise_xml_nfce.exe disponivel."
 }
 
 & ".\.venv\Scripts\pyinstaller.exe" `

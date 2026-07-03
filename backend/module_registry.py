@@ -48,15 +48,13 @@ MODULES: dict[str, ModuleDefinition] = {
     "analise-xml-nfce": ModuleDefinition(
         id="analise-xml-nfce",
         name="Analise XML NFC-e",
-        description="Modulo reservado; o arquivo C atual esta vazio.",
+        description="Processa XML NFC-e/NF-e e gera relatorio fiscal consolidado de totais e itens.",
         operation_type="analysis",
-        accepted_extensions=(".xml",),
+        accepted_extensions=(".xml", ".zip", ".rar"),
         requires_confirmation=False,
-        generates_report=False,
+        generates_report=True,
         generates_output_file=False,
-        runner="disabled",
-        enabled=False,
-        disabled_reason="modules/analise_xml_nfce/src/main.c esta vazio.",
+        runner="analise_xml_nfce",
     ),
 }
 

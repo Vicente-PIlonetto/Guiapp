@@ -436,6 +436,8 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
     try:
         if module.runner == "analise_xml_nfe":
             _run_analise_xml(job, uploaded_file, paths)
+        elif module.runner == "analise_xml_nfce":
+            _run_analise_nfce(job, uploaded_file, paths)
         elif module.runner == "analise_log_nfse":
             _run_analise_log(job, uploaded_file, paths)
         elif module.runner == "autoexec_automation":
@@ -473,6 +475,53 @@ def _run_analise_xml(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> N
         job.result = f"Relatorio XML NF-e gerado para {count} arquivo(s)."
     else:
         job.result = "Relatorio XML NF-e gerado."
+
+
+def _run_analise_nfce(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
+    processing_input, is_batch, count = _prepare_xml_input(uploaded_file, paths)
+    binary = _binary("analise_xml_nfce")
+
+    if is_batch:
+        xml_files = sorted(processing_input.glob("*.xml"))
+        if not xml_files:
+            raise RunnerError("Nenhum arquivo XML encontrado no lote.")
+
+        consolidated_lines: list[str] = []
+        for index, xml_file in enumerate(xml_files, 1):
+            completed = _run_command(
+                job,
+                paths["log"],
+                [str(binary), str(xml_file)],
+                paths["processing"],
+                check=False
+            )
+            if completed.returncode == 0:
+                consolidated_lines.append(completed.stdout)
+            else:
+                consolidated_lines.append(f"ERRO ao processar arquivo {xml_file.name}: {completed.stdout or 'Erro desconhecido'}")
+
+            if index < len(xml_files):
+                consolidated_lines.append("\n" + "=" * 90 + "\n\n")
+
+        report_content = "".join(consolidated_lines)
+        report_txt = paths["result"] / "relatorio.txt"
+        report_txt.write_text(report_content, encoding="utf-8")
+        job.report_path = _text_report_to_pdf(report_txt, "Relatorio XML NFC-e (Lote)", paths["result"] / "relatorio.pdf")
+        report_txt.unlink(missing_ok=True)
+        job.result = f"Relatorio XML NFC-e gerado para {len(xml_files)} arquivo(s)."
+
+    else:
+        completed = _run_command(
+            job,
+            paths["log"],
+            [str(binary), str(processing_input)],
+            paths["processing"]
+        )
+        report_txt = paths["result"] / "relatorio.txt"
+        report_txt.write_text(completed.stdout, encoding="utf-8")
+        job.report_path = _text_report_to_pdf(report_txt, "Relatorio XML NFC-e", paths["result"] / "relatorio.pdf")
+        report_txt.unlink(missing_ok=True)
+        job.result = "Relatorio XML NFC-e gerado."
 
 
 def _run_analise_log(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
