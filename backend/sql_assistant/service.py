@@ -120,7 +120,8 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         correction = (
             "A tentativa anterior foi rejeitada pela validacao contra o catalogo YAML.\n"
             f"Erro encontrado: {validation_feedback}\n"
-            "Corrija usando somente tabelas e colunas listadas no catalogo. Nao repita a coluna invalida.\n\n"
+            "Corrija usando somente tabelas e colunas listadas no catalogo. Nao repita tabela ou coluna invalida.\n"
+            "Se o erro informar um nome correto, substitua obrigatoriamente pelo nome correto e retorne apenas o SQL corrigido.\n\n"
         )
     return (
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
@@ -141,6 +142,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "- Para produtos/itens/estoque, use a tabela ESTOQUE quando ela existir no catalogo; nao use TB_ESTOQUE se TB_ESTOQUE nao estiver no YAML.\n"
         "- Para localizar nota em VENDAS ou COMPRAS, use a coluna NUMERONF quando ela existir no catalogo.\n"
         "- Em VENDAS/COMPRAS, NUMERONF combina numero da nota com zeros a esquerda e serie com 3 digitos; exemplo nota 123 serie 1: '0000000123001'.\n"
+        "- Nao use coluna SERIE em VENDAS ou COMPRAS para localizar notas; a serie deve estar embutida no valor de NUMERONF.\n"
         "- Para NFC-e/cupom, use a tabela e coluna reais do catalogo e formate a numeracao com ate 5 digitos; exemplo cupom 1: '00001'.\n"
         "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
@@ -237,6 +239,7 @@ def _validate_sql_against_catalog(sql: str) -> str:
 
     columns_by_table = _catalog_columns_by_table()
     tables = _tables_in_sql(sql)
+    scrubbed_sql = _strip_sql_literals(sql.upper())
     for table in tables:
         if table not in columns_by_table:
             if table.startswith("TB_") and table[3:] in columns_by_table:
@@ -245,6 +248,13 @@ def _validate_sql_against_catalog(sql: str) -> str:
 
     if not tables:
         return ""
+
+    if any(table in {"VENDAS", "COMPRAS"} for table in tables):
+        if re.search(r"\bSERIE\b", scrubbed_sql):
+            return "Nao use a coluna SERIE em VENDAS/COMPRAS; gere a busca somente por NUMERONF com numero da nota preenchido com zeros a esquerda e serie com 3 digitos no final."
+        numeronf_match = re.search(r"\bNUMERONF\s*=\s*'([^']+)'", sql, re.IGNORECASE)
+        if numeronf_match and not re.fullmatch(r"\d{13}", numeronf_match.group(1)):
+            return "NUMERONF em VENDAS/COMPRAS deve ter 13 digitos: numero da nota com zeros a esquerda seguido da serie com 3 digitos. Exemplo nota 123 serie 1: '0000000123001'."
 
     aliases = _table_aliases_in_sql(sql)
     for alias, column in _qualified_columns_in_sql(sql):
