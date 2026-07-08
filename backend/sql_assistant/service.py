@@ -98,15 +98,16 @@ def _table_aliases() -> dict[str, tuple[str, ...]]:
     }
 
 
-def _known_estoque_columns() -> set[str]:
+def _column_aliases(table_name: str) -> dict[str, str]:
+    if table_name != "ESTOQUE":
+        return {}
     return {
-        "CFOP",
-        "CEST",
-        "CSOSN",
-        "CSOSN_NFCE",
-        "CST_ICMS",
-        "CST_NFCE",
-        "NCM",
+        "CST_ICMS": "CST",
+        "CST ICMS": "CST",
+        "CSOSN NFCE": "CSOSN_NFCE",
+        "CSOSN_NFC_E": "CSOSN_NFCE",
+        "CST NFCE": "CST_NFCE",
+        "CST_NFC_E": "CST_NFCE",
     }
 
 
@@ -124,11 +125,13 @@ def _column_mention_pattern(column_name: str) -> re.Pattern[str]:
     return re.compile(r"\b" + r"[\s_]*".join(parts) + r"\b", re.IGNORECASE)
 
 
-def _find_column_mentions(question: str, columns: list[str]) -> list[tuple[int, int, str]]:
+def _find_column_mentions(question: str, columns: list[str], aliases: dict[str, str] | None = None) -> list[tuple[int, int, str]]:
     mentions: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
-    for column in sorted(columns, key=len, reverse=True):
-        for match in _column_mention_pattern(column).finditer(question):
+    candidates = [(column, column) for column in columns]
+    candidates.extend((alias, column) for alias, column in (aliases or {}).items() if column in columns)
+    for mention_text, column in sorted(candidates, key=lambda item: len(item[0]), reverse=True):
+        for match in _column_mention_pattern(mention_text).finditer(question):
             span = match.span()
             if any(not (span[1] <= used[0] or span[0] >= used[1]) for used in occupied):
                 continue
@@ -205,8 +208,8 @@ def _direct_update_all(question: str) -> dict | None:
         if not table_block:
             continue
         assignments: list[str] = []
-        known_columns = sorted(set(_table_columns(table_block)) | _known_estoque_columns())
-        mentions = _find_column_mentions(question, known_columns)
+        table_columns = _table_columns(table_block)
+        mentions = _find_column_mentions(question, table_columns, _column_aliases(table_name))
         for index, (_, end, column) in enumerate(mentions):
             next_start = mentions[index + 1][0] if index + 1 < len(mentions) else len(question)
             segment = question[end:next_start]
@@ -219,8 +222,8 @@ def _direct_update_all(question: str) -> dict | None:
                 continue
             raw_column_value = segment_values[-1]
             column_type = _column_type(table_block, column)
-            if not column_type and column in {"CSOSN", "CSOSN_NFCE", "CST_NFCE", "CST_ICMS", "CFOP", "NCM", "CEST"}:
-                    column_type = "VARCHAR"
+            if not column_type and column in {"CSOSN", "CSOSN_NFCE", "CST_NFCE", "CST", "CFOP", "NCM", "CEST"}:
+                column_type = "VARCHAR"
             value = _format_sql_value(raw_column_value, column_type)
             assignments.append(f"{column} = {value}")
         if assignments:
