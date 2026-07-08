@@ -94,6 +94,18 @@ def _table_columns(table_block: str) -> list[str]:
     return re.findall(r"^      ([A-Z0-9_]+):", table_block, re.MULTILINE)
 
 
+@lru_cache
+def compact_catalog_index() -> str:
+    lines = []
+    for table_name, block in catalog_table_blocks():
+        columns = _table_columns(block)
+        if columns:
+            lines.append(f"{table_name}: {', '.join(columns)}")
+        else:
+            lines.append(f"{table_name}: sem colunas listadas")
+    return "\n".join(lines)
+
+
 def _refusal(message: str) -> dict:
     return {
         "sql": "",
@@ -131,7 +143,8 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"{correction}"
-        f"CATALOGO SMALL COMMERCE RELEVANTE:\n{relevant_catalog(question)}"
+        f"INDICE COMPLETO DE TABELAS E COLUNAS DO YAML:\n{compact_catalog_index()}\n\n"
+        f"BLOCOS DETALHADOS MAIS RELEVANTES DO YAML:\n{relevant_catalog(question)}"
     )
 
 
@@ -172,6 +185,24 @@ def _tables_in_sql(sql: str) -> list[str]:
     return tables
 
 
+def _table_aliases_in_sql(sql: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for pattern in (
+        r"\bFROM\s+([A-Z0-9_]+)(?:\s+(?:AS\s+)?([A-Z_][A-Z0-9_]*))?",
+        r"\bJOIN\s+([A-Z0-9_]+)(?:\s+(?:AS\s+)?([A-Z_][A-Z0-9_]*))?",
+        r"\bUPDATE\s+([A-Z0-9_]+)(?:\s+(?:AS\s+)?([A-Z_][A-Z0-9_]*))?",
+        r"\bINTO\s+([A-Z0-9_]+)(?:\s+(?:AS\s+)?([A-Z_][A-Z0-9_]*))?",
+        r"\bDELETE\s+FROM\s+([A-Z0-9_]+)(?:\s+(?:AS\s+)?([A-Z_][A-Z0-9_]*))?",
+    ):
+        for match in re.finditer(pattern, sql, re.IGNORECASE):
+            table = match.group(1).upper()
+            aliases[table] = table
+            alias = (match.group(2) or "").upper()
+            if alias and alias not in {"WHERE", "SET", "VALUES", "JOIN", "ORDER", "GROUP"}:
+                aliases[alias] = table
+    return aliases
+
+
 def _candidate_columns_in_sql(sql: str) -> set[str]:
     scrubbed = _strip_sql_literals(sql.upper())
     candidates: set[str] = set()
@@ -193,28 +224,39 @@ def _candidate_columns_in_sql(sql: str) -> set[str]:
     return candidates
 
 
+def _qualified_columns_in_sql(sql: str) -> list[tuple[str, str]]:
+    scrubbed = _strip_sql_literals(sql.upper())
+    return [(match.group(1), match.group(2)) for match in re.finditer(r"\b([A-Z_][A-Z0-9_]*)\.([A-Z_][A-Z0-9_]*)\b", scrubbed)]
+
+
 def _validate_sql_against_catalog(sql: str) -> str:
     if re.match(r"^\s*SET\s+GENERATOR\b", sql, re.IGNORECASE):
         return ""
 
     columns_by_table = _catalog_columns_by_table()
     tables = _tables_in_sql(sql)
-    known_tables = [table for table in tables if table in columns_by_table]
-    if not known_tables:
+    for table in tables:
+        if table not in columns_by_table:
+            return f"A tabela {table} nao existe no catalogo YAML enviado ao assistente."
+
+    if not tables:
         return ""
 
-    if len(known_tables) == 1:
-        table = known_tables[0]
+    aliases = _table_aliases_in_sql(sql)
+    for alias, column in _qualified_columns_in_sql(sql):
+        table = aliases.get(alias)
+        if table and column not in columns_by_table.get(table, set()):
+            return f"A coluna {column} nao existe na tabela {table} conforme o catalogo YAML."
+
+    if len(tables) == 1:
+        table = tables[0]
         valid_columns = columns_by_table[table]
         for column in sorted(_candidate_columns_in_sql(sql)):
-            if column in columns_by_table:
+            if column in columns_by_table or column in aliases:
                 continue
             if column not in valid_columns:
                 return f"A coluna {column} nao existe na tabela {table} conforme o catalogo YAML."
 
-    for table in tables:
-        if table not in columns_by_table:
-            return f"A tabela {table} nao existe no catalogo YAML enviado ao assistente."
     return ""
 
 
