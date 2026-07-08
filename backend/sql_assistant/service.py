@@ -14,8 +14,8 @@ DESTRUCTIVE_SQL_RE = re.compile(
 )
 MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
-SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
+SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 
 
 class SqlAssistantError(RuntimeError):
@@ -49,6 +49,8 @@ def _system_prompt() -> str:
         "Se uma condicao for necessaria mas nao foi informada, pergunte pela condicao em vez de criar uma condicao falsa.\n"
         "Recuse DROP, ALTER, TRUNCATE, CREATE DATABASE, EXECUTE BLOCK, GRANT, REVOKE e qualquer comando fora do escopo.\n"
         "Retorne apenas um comando SQL, sem exemplos alternativos.\n"
+        "Nao retorne texto fora do JSON. Nao use markdown. Nao use bloco ```sql.\n"
+        "O campo sql deve conter somente o comando SQL final, sem comentarios, sem explicacao e sem multiplos comandos.\n"
         "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n"
         "A explicacao deve ter no maximo duas frases curtas.\n"
         "Responda exclusivamente como JSON valido no formato:\n"
@@ -65,6 +67,11 @@ def _single_line_sql(sql: str) -> str:
     return cleaned
 
 
+def _has_multiple_sql_commands(sql: str) -> bool:
+    statements = [item.strip() for item in sql.split(";") if item.strip()]
+    return len(statements) > 1
+
+
 def _extract_json_content(content: str) -> dict:
     candidate = content.strip()
     match = JSON_BLOCK_RE.search(candidate)
@@ -74,13 +81,7 @@ def _extract_json_content(content: str) -> dict:
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        sql_match = SQL_BLOCK_RE.search(content)
-        sql = _single_line_sql(sql_match.group(1) if sql_match else content.strip())
-        return {
-            "sql": sql,
-            "explanation": "O Hermes retornou texto fora do formato JSON esperado.",
-            "warnings": ["Revise manualmente antes de usar."],
-        }
+        raise SqlAssistantError("A IA retornou texto fora do formato JSON esperado. Tente reformular a solicitacao.")
 
     raw_warnings = parsed.get("warnings") or []
     if isinstance(raw_warnings, str):
@@ -147,6 +148,10 @@ def generate_sql(question: str) -> dict:
 
     result = _extract_json_content(_call_hermes(cleaned_question))
     sql = result["sql"]
+    if not sql or not SQL_START_RE.search(sql):
+        raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
+    if _has_multiple_sql_commands(sql):
+        raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
     if DESTRUCTIVE_SQL_RE.search(sql):
         return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
 
