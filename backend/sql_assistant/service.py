@@ -16,6 +16,7 @@ MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
+TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 
 
 class SqlAssistantError(RuntimeError):
@@ -28,6 +29,62 @@ def load_small_commerce_catalog() -> str:
     return path.read_text(encoding="utf-8")
 
 
+@lru_cache
+def catalog_table_blocks() -> list[tuple[str, str]]:
+    catalog = load_small_commerce_catalog()
+    marker = "\ntables:\n"
+    if marker not in catalog:
+        return []
+    blocks: list[tuple[str, str]] = []
+    current_name = ""
+    current_lines: list[str] = []
+    for line in catalog.splitlines()[catalog.splitlines().index("tables:") + 1:]:
+        table_match = re.match(r"^  ([A-Z0-9_]+):\s*$", line)
+        if table_match:
+            if current_name:
+                blocks.append((current_name, "\n".join(current_lines)))
+            current_name = table_match.group(1)
+            current_lines = [line]
+            continue
+        if current_name:
+            current_lines.append(line)
+    if current_name:
+        blocks.append((current_name, "\n".join(current_lines)))
+    return blocks
+
+
+def relevant_catalog(question: str, max_blocks: int = 8) -> str:
+    catalog = load_small_commerce_catalog()
+    rules = catalog.split("\ntables:\n", 1)[0].strip()
+    question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
+    scored: list[tuple[int, str, str]] = []
+    for table_name, block in catalog_table_blocks():
+        block_upper = block.upper()
+        score = 0
+        if table_name in question_tokens:
+            score += 8
+        for token in question_tokens:
+            if token in block_upper:
+                score += 1
+        if score:
+            scored.append((score, table_name, block))
+
+    if not scored:
+        aliases = {
+            "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
+        }
+        for table_name, terms in aliases.items():
+            if any(term in question_tokens for term in terms):
+                for candidate_name, block in catalog_table_blocks():
+                    if candidate_name == table_name:
+                        scored.append((10, candidate_name, block))
+
+    selected = [block for _, _, block in sorted(scored, reverse=True)[:max_blocks]]
+    if not selected:
+        selected = [block for _, block in catalog_table_blocks()[:3]]
+    return f"{rules}\n\ntables:\n" + "\n".join(selected)
+
+
 def _refusal(message: str) -> dict:
     return {
         "sql": "",
@@ -36,7 +93,7 @@ def _refusal(message: str) -> dict:
     }
 
 
-def _system_prompt() -> str:
+def _system_prompt(question: str) -> str:
     return (
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
         "Nunca execute SQL. Gere apenas texto para revisao humana.\n"
@@ -55,7 +112,7 @@ def _system_prompt() -> str:
         "A explicacao deve ter no maximo duas frases curtas.\n"
         "Responda exclusivamente como JSON valido no formato:\n"
         '{"sql":"...","explanation":"...","warnings":["..."]}\n\n'
-        f"CATALOGO SMALL COMMERCE:\n{load_small_commerce_catalog()}"
+        f"CATALOGO SMALL COMMERCE RELEVANTE:\n{relevant_catalog(question)}"
     )
 
 
@@ -77,6 +134,8 @@ def _extract_json_content(content: str) -> dict:
     match = JSON_BLOCK_RE.search(candidate)
     if match:
         candidate = match.group(1)
+    elif "{" in candidate and "}" in candidate:
+        candidate = candidate[candidate.find("{"):candidate.rfind("}") + 1]
 
     try:
         parsed = json.loads(candidate)
@@ -107,7 +166,7 @@ def _call_hermes(question: str) -> str:
         "model": settings.hermes_model or None,
         "temperature": 0.1,
         "messages": [
-            {"role": "system", "content": _system_prompt()},
+            {"role": "system", "content": _system_prompt(question)},
             {"role": "user", "content": question},
         ],
     }
