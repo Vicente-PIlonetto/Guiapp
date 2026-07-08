@@ -20,7 +20,7 @@ UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 VALUE_RE = re.compile(
-    r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|VALOR|COMO|PARA)\s+['\"]?([A-Z0-9._-]+)['\"]?",
+    r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|VALOR|COMO|PARA)(?:\s+DE)?\s+['\"]?([A-Z0-9._-]+)['\"]?",
     re.IGNORECASE,
 )
 
@@ -141,7 +141,7 @@ def _direct_update_all(question: str) -> dict | None:
     value_matches = list(VALUE_RE.finditer(question))
     if not value_matches:
         return None
-    ignored_values = {"TODO", "TODOS", "TODA", "TODAS", "PREENCHER", "ALTERAR", "ATUALIZAR", "SETAR"}
+    ignored_values = {"DE", "DO", "DA", "TODO", "TODOS", "TODA", "TODAS", "PREENCHER", "ALTERAR", "ATUALIZAR", "SETAR"}
     raw_value = next((match.group(1) for match in reversed(value_matches) if match.group(1).upper() not in ignored_values), "")
     if not raw_value:
         return None
