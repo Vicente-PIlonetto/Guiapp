@@ -24,6 +24,14 @@ VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 NUMBER_RE = re.compile(r"\b(\d+)\b")
+NUMBER_WORDS = {
+    "UM": 1,
+    "UMA": 1,
+    "DOIS": 2,
+    "DUAS": 2,
+    "TRES": 3,
+    "TRÊS": 3,
+}
 
 
 class SqlAssistantError(RuntimeError):
@@ -176,6 +184,34 @@ def _generator_command(question: str) -> dict | None:
         "sql": f"SET GENERATOR {generator} TO {value};",
         "explanation": "",
         "warnings": ["Generator: use o numero anterior ao documento que deve iniciar."],
+    }
+
+
+def _direct_vendas_numeronf_lookup(question: str) -> dict | None:
+    upper_question = question.upper()
+    if "VENDAS" not in upper_question:
+        return None
+    if not any(term in upper_question for term in ("LOCALIZ", "BUSC", "PROCUR", "ACH", "SELECT", "CONSULT")):
+        return None
+
+    nota_match = re.search(r"\b(?:NOTA|NF|NUMERONF)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
+    serie_match = re.search(r"\bSERIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b|\bSÉRIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b", upper_question)
+    if not nota_match or not serie_match:
+        return None
+
+    nota = nota_match.group(1)
+    serie_raw = next((group for group in serie_match.groups() if group), "")
+    if not serie_raw:
+        return None
+
+    serie = NUMBER_WORDS.get(serie_raw, int(serie_raw) if serie_raw.isdigit() else 0)
+    if not serie:
+        return None
+    numeronf = f"{int(nota):010d}{serie:03d}"
+    return {
+        "sql": f"SELECT * FROM VENDAS WHERE NUMERONF = '{numeronf}';",
+        "explanation": "",
+        "warnings": [],
     }
 
 
@@ -367,6 +403,10 @@ def generate_sql(question: str) -> dict:
     direct_result = _direct_update_all(cleaned_question)
     if direct_result:
         return direct_result
+
+    vendas_lookup = _direct_vendas_numeronf_lookup(cleaned_question)
+    if vendas_lookup:
+        return vendas_lookup
 
     generator_result = _generator_command(cleaned_question)
     if generator_result:
