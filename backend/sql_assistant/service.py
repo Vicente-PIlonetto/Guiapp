@@ -15,7 +15,7 @@ DESTRUCTIVE_SQL_RE = re.compile(
 MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
-SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE)\b[\s\S]*?(?:;|$)", re.IGNORECASE)
+SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b[\s\S]*?(?:;|$)", re.IGNORECASE)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
@@ -322,6 +322,12 @@ def _system_prompt(question: str) -> str:
         "Responda somente com um comando SQL final, sem JSON, sem markdown, sem comentarios e sem explicacao.\n"
         "Retorne apenas um comando SQL, sem exemplos alternativos e sem multiplos comandos.\n"
         "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n\n"
+        "Regras de negocio do Small Commerce que devem ser aplicadas pela IA:\n"
+        "- Para localizar nota em VENDAS ou COMPRAS, use a coluna NUMERONF quando ela existir no catalogo.\n"
+        "- Em VENDAS/COMPRAS, NUMERONF combina numero da nota com zeros a esquerda e serie com 3 digitos; exemplo nota 123 serie 1: '0000000123001'.\n"
+        "- Para NFC-e/cupom, use a tabela e coluna reais do catalogo e formate a numeracao com ate 5 digitos; exemplo cupom 1: '00001'.\n"
+        "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
+        "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"CATALOGO SMALL COMMERCE RELEVANTE:\n{relevant_catalog(question)}"
     )
 
@@ -427,18 +433,6 @@ def generate_sql(question: str) -> dict:
         raise SqlAssistantError("Pergunta muito longa. Reduza o texto e tente novamente.")
     if DESTRUCTIVE_SQL_RE.search(cleaned_question):
         return _refusal("Nao posso auxiliar com comandos destrutivos ou administrativos fora do escopo de suporte.")
-
-    direct_result = _direct_update_all(cleaned_question)
-    if direct_result:
-        return direct_result
-
-    document_lookup = _direct_document_lookup(cleaned_question)
-    if document_lookup:
-        return document_lookup
-
-    generator_result = _generator_command(cleaned_question)
-    if generator_result:
-        return generator_result
 
     result = _extract_sql_content(_call_hermes(cleaned_question))
     sql = result["sql"]
