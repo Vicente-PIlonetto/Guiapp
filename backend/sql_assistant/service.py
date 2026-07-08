@@ -19,20 +19,7 @@ SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b[
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
-VALUE_RE = re.compile(
-    r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|VALOR|COMO|PARA)(?:\s+DE)?\s+['\"]?([A-Z0-9._-]+)['\"]?",
-    re.IGNORECASE,
-)
-NUMBER_RE = re.compile(r"\b(\d+)\b")
-NUMBER_WORDS = {
-    "UM": 1,
-    "UMA": 1,
-    "DOIS": 2,
-    "DUAS": 2,
-    "TRES": 3,
-    "TRÊS": 3,
-}
-LOOKUP_TERMS = ("LOCALIZ", "BUSC", "PROCUR", "ACH", "SELECT", "CONSULT")
+SQL_IDENTIFIER_RE = re.compile(r"\b[A-Z_][A-Z0-9_]*\b", re.IGNORECASE)
 
 
 class SqlAssistantError(RuntimeError):
@@ -85,15 +72,17 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
         if score:
             scored.append((score, table_name, block))
 
-    if not scored:
-        aliases = {
-            "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
-        }
-        for table_name, terms in aliases.items():
-            if any(term in question_tokens for term in terms):
-                for candidate_name, block in catalog_table_blocks():
-                    if candidate_name == table_name:
-                        scored.append((10, candidate_name, block))
+    aliases = {
+        "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
+        "VENDAS": ("VENDA", "VENDAS", "NOTA", "NF"),
+        "COMPRAS": ("COMPRA", "COMPRAS", "NOTA", "NF"),
+        "NFCE": ("NFCE", "NFC", "NFC_E", "CUPOM"),
+    }
+    for table_name, terms in aliases.items():
+        if any(term in question_tokens for term in terms):
+            for candidate_name, block in catalog_table_blocks():
+                if candidate_name == table_name and all(candidate_name != item[1] for item in scored):
+                    scored.append((10, candidate_name, block))
 
     selected = [block for _, _, block in sorted(scored, reverse=True)[:max_blocks]]
     if not selected:
@@ -101,202 +90,8 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     return f"{rules}\n\ntables:\n" + "\n".join(selected)
 
 
-def _table_aliases() -> dict[str, tuple[str, ...]]:
-    return {
-        "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
-    }
-
-
-def _column_aliases(table_name: str) -> dict[str, str]:
-    if table_name != "ESTOQUE":
-        return {}
-    return {
-        "CST_ICMS": "CST",
-        "CST ICMS": "CST",
-        "CSOSN NFCE": "CSOSN_NFCE",
-        "CSOSN_NFC_E": "CSOSN_NFCE",
-        "CST NFCE": "CST_NFCE",
-        "CST_NFC_E": "CST_NFCE",
-    }
-
-
-def _column_type(table_block: str, column_name: str) -> str:
-    match = re.search(rf"^\s+{re.escape(column_name)}:\s+\{{type:\s+\"([^\"]+)\"", table_block, re.MULTILINE)
-    return match.group(1) if match else ""
-
-
 def _table_columns(table_block: str) -> list[str]:
     return re.findall(r"^      ([A-Z0-9_]+):", table_block, re.MULTILINE)
-
-
-def _column_mention_pattern(column_name: str) -> re.Pattern[str]:
-    parts = [re.escape(part) for part in column_name.split("_") if part]
-    return re.compile(r"\b" + r"[\s_]*".join(parts) + r"\b", re.IGNORECASE)
-
-
-def _find_column_mentions(question: str, columns: list[str], aliases: dict[str, str] | None = None) -> list[tuple[int, int, str]]:
-    mentions: list[tuple[int, int, str]] = []
-    occupied: list[tuple[int, int]] = []
-    candidates = [(column, column) for column in columns]
-    candidates.extend((alias, column) for alias, column in (aliases or {}).items() if column in columns)
-    for mention_text, column in sorted(candidates, key=lambda item: len(item[0]), reverse=True):
-        for match in _column_mention_pattern(mention_text).finditer(question):
-            span = match.span()
-            if any(not (span[1] <= used[0] or span[0] >= used[1]) for used in occupied):
-                continue
-            occupied.append(span)
-            mentions.append((span[0], span[1], column))
-    return sorted(mentions)
-
-
-def _generator_command(question: str) -> dict | None:
-    upper_question = question.upper()
-    numbers = [int(match.group(1)) for match in NUMBER_RE.finditer(question)]
-    if not numbers:
-        return None
-
-    generator = ""
-    if re.search(r"\bOS\b|ORDEM\s+DE\s+SERVICO|ORDEM\s+DE\s+SERVIÇO", upper_question):
-        generator = "G_NUMEROOS"
-    elif "ORCAMENTO" in upper_question or "ORÇAMENTO" in upper_question:
-        generator = "G_ORCAMENTO"
-    elif "NFC" in upper_question:
-        generator = "G_NUMERONFCE"
-    elif "MDF" in upper_question:
-        generator = "G_MDFENUMERO"
-    elif "CFE" in upper_question or "CF-E" in upper_question or "SAT" in upper_question:
-        caixa_match = re.search(r"\b(?:CAIXA|PDV)\s*(\d+)\b", upper_question)
-        if not caixa_match:
-            raise SqlAssistantError("Informe o numero do caixa para gerar o generator CFE-SAT.")
-        generator = f"G_NUMEROCFESAT_{caixa_match.group(1)}"
-    elif re.search(r"\bNF\b|NOTA\s+FISCAL", upper_question):
-        serie_match = re.search(r"\bSERIE\s*(\d+)\b|\bSÉRIE\s*(\d+)\b", upper_question)
-        serie = next((group for group in (serie_match.groups() if serie_match else []) if group), "1")
-        generator = f"G_SERIE{serie}"
-
-    if not generator:
-        return None
-
-    value = numbers[-1]
-    if any(term in upper_question for term in ("INICIAR", "COMEÇAR", "COMECAR", "PROXIMA", "PRÓXIMA", "PROXIMO", "PRÓXIMO")):
-        value = max(0, value - 1)
-
-    return {
-        "sql": f"SET GENERATOR {generator} TO {value};",
-        "explanation": "",
-        "warnings": ["Generator: use o numero anterior ao documento que deve iniciar."],
-    }
-
-
-def _parse_series(question: str) -> int:
-    upper_question = question.upper()
-    serie_match = re.search(r"\bSERIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b|\bSÉRIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b", upper_question)
-    serie_raw = next((group for group in (serie_match.groups() if serie_match else []) if group), "")
-    if not serie_raw:
-        return 0
-    return NUMBER_WORDS.get(serie_raw, int(serie_raw) if serie_raw.isdigit() else 0)
-
-
-def _find_catalog_table(table_terms: tuple[str, ...]) -> tuple[str, str]:
-    for table_name, block in catalog_table_blocks():
-        if any(term in table_name for term in table_terms):
-            return table_name, block
-    return "", ""
-
-
-def _direct_document_lookup(question: str) -> dict | None:
-    upper_question = question.upper()
-    if not any(term in upper_question for term in LOOKUP_TERMS):
-        return None
-
-    for table_name in ("VENDAS", "COMPRAS"):
-        if table_name not in upper_question:
-            continue
-        nota_match = re.search(r"\b(?:NOTA|NF|NUMERONF|NUMERO|N[ºO]|NRO)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
-        serie = _parse_series(question)
-        if not nota_match or not serie:
-            return None
-        numeronf = f"{int(nota_match.group(1)):010d}{serie:03d}"
-        return {
-            "sql": f"SELECT * FROM {table_name} WHERE NUMERONF = '{numeronf}';",
-            "explanation": "",
-            "warnings": [],
-        }
-
-    if not re.search(r"\b(NFC\s*-?\s*E|NFCE|CUPOM)\b", upper_question):
-        return None
-    number_match = re.search(r"\b(?:CUPOM|NFC\s*-?\s*E|NFCE|NUMERO|N[ºO]|NRO)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
-    if not number_match:
-        return None
-    table_name, table_block = _find_catalog_table(("NFCE", "NFC_E", "NFC"))
-    if not table_name:
-        table_name = "NFCE"
-    columns = _table_columns(table_block) if table_block else []
-    column_name = next(
-        (column for column in ("NUMERO", "NUMERONFCE", "NUMERONF", "CUPOM", "NUM_CUPOM") if column in columns),
-        "NUMERO",
-    )
-    return {
-        "sql": f"SELECT * FROM {table_name} WHERE {column_name} = '{int(number_match.group(1)):05d}';",
-        "explanation": "",
-        "warnings": [],
-    }
-
-
-def _format_sql_value(raw_value: str, column_type: str) -> str:
-    if any(kind in column_type.upper() for kind in ("CHAR", "VARCHAR", "DATE", "TIME", "BLOB")):
-        return "'" + raw_value.replace("'", "''") + "'"
-    return raw_value
-
-
-def _direct_update_all(question: str) -> dict | None:
-    upper_question = question.upper()
-    if not any(term in upper_question for term in ("TODO", "TODOS", "TODA", "TODAS")):
-        return None
-    if not any(term in upper_question for term in ("PREENCH", "ALTER", "SET", "SETA", "ATUALIZ")):
-        return None
-
-    tokens = {token.upper() for token in TOKEN_RE.findall(question)}
-    value_matches = list(VALUE_RE.finditer(question))
-    if not value_matches:
-        return None
-    ignored_values = {"DE", "DO", "DA", "TODO", "TODOS", "TODA", "TODAS", "PREENCHER", "ALTERAR", "ATUALIZAR", "SETAR"}
-    raw_value = next((match.group(1) for match in reversed(value_matches) if match.group(1).upper() not in ignored_values), "")
-    if not raw_value:
-        return None
-
-    for table_name, aliases in _table_aliases().items():
-        if not any(alias in tokens for alias in aliases):
-            continue
-        table_block = next((block for candidate, block in catalog_table_blocks() if candidate == table_name), "")
-        if not table_block:
-            continue
-        assignments: list[str] = []
-        table_columns = _table_columns(table_block)
-        mentions = _find_column_mentions(question, table_columns, _column_aliases(table_name))
-        for index, (_, end, column) in enumerate(mentions):
-            next_start = mentions[index + 1][0] if index + 1 < len(mentions) else len(question)
-            segment = question[end:next_start]
-            segment_values = [
-                match.group(1)
-                for match in VALUE_RE.finditer(segment)
-                if match.group(1).upper() not in ignored_values
-            ]
-            if not segment_values:
-                continue
-            raw_column_value = segment_values[-1]
-            column_type = _column_type(table_block, column)
-            if not column_type and column in {"CSOSN", "CSOSN_NFCE", "CST_NFCE", "CST", "CFOP", "NCM", "CEST"}:
-                column_type = "VARCHAR"
-            value = _format_sql_value(raw_column_value, column_type)
-            assignments.append(f"{column} = {value}")
-        if assignments:
-            return {
-                "sql": f"UPDATE {table_name} SET {', '.join(assignments)};",
-                "explanation": "",
-                "warnings": ["Script de alteracao: revise, teste em homologacao e faca backup antes de usar."],
-            }
-    return None
 
 
 def _refusal(message: str) -> dict:
@@ -307,7 +102,14 @@ def _refusal(message: str) -> dict:
     }
 
 
-def _system_prompt(question: str) -> str:
+def _system_prompt(question: str, validation_feedback: str = "") -> str:
+    correction = ""
+    if validation_feedback:
+        correction = (
+            "A tentativa anterior foi rejeitada pela validacao contra o catalogo YAML.\n"
+            f"Erro encontrado: {validation_feedback}\n"
+            "Corrija usando somente tabelas e colunas listadas no catalogo. Nao repita a coluna invalida.\n\n"
+        )
     return (
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
         "Nunca execute SQL. Gere apenas texto para revisao humana.\n"
@@ -328,6 +130,7 @@ def _system_prompt(question: str) -> str:
         "- Para NFC-e/cupom, use a tabela e coluna reais do catalogo e formate a numeracao com ate 5 digitos; exemplo cupom 1: '00001'.\n"
         "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
+        f"{correction}"
         f"CATALOGO SMALL COMMERCE RELEVANTE:\n{relevant_catalog(question)}"
     )
 
@@ -343,6 +146,76 @@ def _single_line_sql(sql: str) -> str:
 def _has_multiple_sql_commands(sql: str) -> bool:
     statements = [item.strip() for item in sql.split(";") if item.strip()]
     return len(statements) > 1
+
+
+def _catalog_columns_by_table() -> dict[str, set[str]]:
+    return {table_name: set(_table_columns(block)) for table_name, block in catalog_table_blocks()}
+
+
+def _strip_sql_literals(sql: str) -> str:
+    return re.sub(r"'(?:''|[^'])*'", "''", sql)
+
+
+def _tables_in_sql(sql: str) -> list[str]:
+    tables: list[str] = []
+    for pattern in (
+        r"\bFROM\s+([A-Z0-9_]+)\b",
+        r"\bJOIN\s+([A-Z0-9_]+)\b",
+        r"\bUPDATE\s+([A-Z0-9_]+)\b",
+        r"\bINTO\s+([A-Z0-9_]+)\b",
+        r"\bDELETE\s+FROM\s+([A-Z0-9_]+)\b",
+    ):
+        for match in re.finditer(pattern, sql, re.IGNORECASE):
+            table = match.group(1).upper()
+            if table not in tables:
+                tables.append(table)
+    return tables
+
+
+def _candidate_columns_in_sql(sql: str) -> set[str]:
+    scrubbed = _strip_sql_literals(sql.upper())
+    candidates: set[str] = set()
+    for pattern in (
+        r"\b([A-Z_][A-Z0-9_]*)\s*=",
+        r"\b([A-Z_][A-Z0-9_]*)\s+(?:IS|LIKE|IN|BETWEEN|STARTING|CONTAINING)\b",
+        r"\bSET\s+(.+?)(?:\s+WHERE\b|;|$)",
+        r"\bWHERE\s+(.+?)(?:\s+ORDER\s+BY\b|\s+GROUP\s+BY\b|;|$)",
+    ):
+        for match in re.finditer(pattern, scrubbed, re.IGNORECASE | re.DOTALL):
+            text = match.group(1)
+            for token in SQL_IDENTIFIER_RE.findall(text):
+                upper_token = token.upper()
+                if upper_token not in {
+                    "AND", "OR", "NOT", "NULL", "IS", "LIKE", "IN", "BETWEEN", "STARTING", "CONTAINING",
+                    "SET", "WHERE", "SELECT", "FROM", "UPDATE", "INSERT", "DELETE", "VALUES",
+                }:
+                    candidates.add(upper_token)
+    return candidates
+
+
+def _validate_sql_against_catalog(sql: str) -> str:
+    if re.match(r"^\s*SET\s+GENERATOR\b", sql, re.IGNORECASE):
+        return ""
+
+    columns_by_table = _catalog_columns_by_table()
+    tables = _tables_in_sql(sql)
+    known_tables = [table for table in tables if table in columns_by_table]
+    if not known_tables:
+        return ""
+
+    if len(known_tables) == 1:
+        table = known_tables[0]
+        valid_columns = columns_by_table[table]
+        for column in sorted(_candidate_columns_in_sql(sql)):
+            if column in columns_by_table:
+                continue
+            if column not in valid_columns:
+                return f"A coluna {column} nao existe na tabela {table} conforme o catalogo YAML."
+
+    for table in tables:
+        if table not in columns_by_table:
+            return f"A tabela {table} nao existe no catalogo YAML enviado ao assistente."
+    return ""
 
 
 def _extract_sql_content(content: str) -> dict:
@@ -386,7 +259,7 @@ def _extract_sql_content(content: str) -> dict:
     }
 
 
-def _call_hermes(question: str) -> str:
+def _call_hermes(question: str, validation_feedback: str = "") -> str:
     settings = get_settings()
     if not settings.hermes_api_url:
         raise SqlAssistantError("HERMES_API_URL nao configurado no servidor.")
@@ -395,7 +268,7 @@ def _call_hermes(question: str) -> str:
         "model": settings.hermes_model or None,
         "temperature": 0.1,
         "messages": [
-            {"role": "system", "content": _system_prompt(question)},
+            {"role": "system", "content": _system_prompt(question, validation_feedback)},
             {"role": "user", "content": question},
         ],
     }
@@ -434,14 +307,26 @@ def generate_sql(question: str) -> dict:
     if DESTRUCTIVE_SQL_RE.search(cleaned_question):
         return _refusal("Nao posso auxiliar com comandos destrutivos ou administrativos fora do escopo de suporte.")
 
-    result = _extract_sql_content(_call_hermes(cleaned_question))
-    sql = result["sql"]
-    if not sql or not SQL_START_RE.search(sql):
+    result = None
+    validation_error = ""
+    for _attempt in range(2):
+        result = _extract_sql_content(_call_hermes(cleaned_question, validation_error))
+        sql = result["sql"]
+        if not sql or not SQL_START_RE.search(sql):
+            raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
+        if _has_multiple_sql_commands(sql):
+            raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
+        if DESTRUCTIVE_SQL_RE.search(sql):
+            return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
+        validation_error = _validate_sql_against_catalog(sql)
+        if not validation_error:
+            break
+    if result is None:
         raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
-    if _has_multiple_sql_commands(sql):
-        raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
-    if DESTRUCTIVE_SQL_RE.search(sql):
-        return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
+
+    sql = result["sql"]
+    if validation_error:
+        raise SqlAssistantError(validation_error)
 
     warnings = list(dict.fromkeys(result["warnings"]))
     if MODIFICATION_SQL_RE.search(sql):
