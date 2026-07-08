@@ -14,9 +14,15 @@ DESTRUCTIVE_SQL_RE = re.compile(
 )
 MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
+SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE)\b[\s\S]*?(?:;|$)", re.IGNORECASE)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
+VALUE_RE = re.compile(
+    r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|VALOR|COMO|PARA)\s+['\"]?([A-Z0-9._-]+)['\"]?",
+    re.IGNORECASE,
+)
 
 
 class SqlAssistantError(RuntimeError):
@@ -85,6 +91,59 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     return f"{rules}\n\ntables:\n" + "\n".join(selected)
 
 
+def _table_aliases() -> dict[str, tuple[str, ...]]:
+    return {
+        "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
+    }
+
+
+def _column_type(table_block: str, column_name: str) -> str:
+    match = re.search(rf"^\s+{re.escape(column_name)}:\s+\{{type:\s+\"([^\"]+)\"", table_block, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def _format_sql_value(raw_value: str, column_type: str) -> str:
+    if any(kind in column_type.upper() for kind in ("CHAR", "VARCHAR", "DATE", "TIME", "BLOB")):
+        return "'" + raw_value.replace("'", "''") + "'"
+    return raw_value
+
+
+def _direct_update_all(question: str) -> dict | None:
+    upper_question = question.upper()
+    if not any(term in upper_question for term in ("TODO", "TODOS", "TODA", "TODAS")):
+        return None
+    if not any(term in upper_question for term in ("PREENCH", "ALTER", "SET", "SETA", "ATUALIZ")):
+        return None
+
+    tokens = {token.upper() for token in TOKEN_RE.findall(question)}
+    value_matches = list(VALUE_RE.finditer(question))
+    if not value_matches:
+        return None
+    ignored_values = {"TODO", "TODOS", "TODA", "TODAS", "PREENCHER", "ALTERAR", "ATUALIZAR", "SETAR"}
+    raw_value = next((match.group(1) for match in reversed(value_matches) if match.group(1).upper() not in ignored_values), "")
+    if not raw_value:
+        return None
+
+    for table_name, aliases in _table_aliases().items():
+        if not any(alias in tokens for alias in aliases):
+            continue
+        table_block = next((block for candidate, block in catalog_table_blocks() if candidate == table_name), "")
+        if not table_block:
+            continue
+        for token in sorted(tokens, key=len, reverse=True):
+            if re.search(rf"^      {re.escape(token)}:", table_block, re.MULTILINE):
+                column_type = _column_type(table_block, token)
+                if not column_type and token in {"CSOSN", "CST_NFCE", "CST_ICMS", "CFOP", "NCM", "CEST"}:
+                    column_type = "VARCHAR"
+                value = _format_sql_value(raw_value, column_type)
+                return {
+                    "sql": f"UPDATE {table_name} SET {token} = {value};",
+                    "explanation": "",
+                    "warnings": ["Script de alteracao: revise, teste em homologacao e faca backup antes de usar."],
+                }
+    return None
+
+
 def _refusal(message: str) -> dict:
     return {
         "sql": "",
@@ -105,13 +164,9 @@ def _system_prompt(question: str) -> str:
         "UPDATE sem WHERE e valido quando o usuario pedir alteracao em massa/todos os registros; apenas avise o risco.\n"
         "Se uma condicao for necessaria mas nao foi informada, pergunte pela condicao em vez de criar uma condicao falsa.\n"
         "Recuse DROP, ALTER, TRUNCATE, CREATE DATABASE, EXECUTE BLOCK, GRANT, REVOKE e qualquer comando fora do escopo.\n"
-        "Retorne apenas um comando SQL, sem exemplos alternativos.\n"
-        "Nao retorne texto fora do JSON. Nao use markdown. Nao use bloco ```sql.\n"
-        "O campo sql deve conter somente o comando SQL final, sem comentarios, sem explicacao e sem multiplos comandos.\n"
-        "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n"
-        "A explicacao deve ter no maximo duas frases curtas.\n"
-        "Responda exclusivamente como JSON valido no formato:\n"
-        '{"sql":"...","explanation":"...","warnings":["..."]}\n\n'
+        "Responda somente com um comando SQL final, sem JSON, sem markdown, sem comentarios e sem explicacao.\n"
+        "Retorne apenas um comando SQL, sem exemplos alternativos e sem multiplos comandos.\n"
+        "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n\n"
         f"CATALOGO SMALL COMMERCE RELEVANTE:\n{relevant_catalog(question)}"
     )
 
@@ -129,7 +184,7 @@ def _has_multiple_sql_commands(sql: str) -> bool:
     return len(statements) > 1
 
 
-def _extract_json_content(content: str) -> dict:
+def _extract_sql_content(content: str) -> dict:
     candidate = content.strip()
     match = JSON_BLOCK_RE.search(candidate)
     if match:
@@ -139,21 +194,34 @@ def _extract_json_content(content: str) -> dict:
 
     try:
         parsed = json.loads(candidate)
+        sql = str(parsed.get("sql") or "")
+        raw_warnings = parsed.get("warnings") or []
+        if isinstance(raw_warnings, str):
+            warnings = [raw_warnings]
+        elif isinstance(raw_warnings, list):
+            warnings = [str(item) for item in raw_warnings]
+        else:
+            warnings = []
+        return {
+            "sql": _single_line_sql(sql),
+            "explanation": str(parsed.get("explanation") or "").strip(),
+            "warnings": warnings,
+        }
     except json.JSONDecodeError:
-        raise SqlAssistantError("A IA retornou texto fora do formato JSON esperado. Tente reformular a solicitacao.")
+        pass
 
-    raw_warnings = parsed.get("warnings") or []
-    if isinstance(raw_warnings, str):
-        warnings = [raw_warnings]
-    elif isinstance(raw_warnings, list):
-        warnings = [str(item) for item in raw_warnings]
+    sql_block = SQL_BLOCK_RE.search(content)
+    if sql_block:
+        sql = sql_block.group(1)
     else:
-        warnings = []
-
+        sql_match = SQL_COMMAND_RE.search(content)
+        if not sql_match:
+            raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
+        sql = sql_match.group(0)
     return {
-        "sql": _single_line_sql(str(parsed.get("sql") or "")),
-        "explanation": str(parsed.get("explanation") or "").strip(),
-        "warnings": warnings,
+        "sql": _single_line_sql(sql),
+        "explanation": "",
+        "warnings": [],
     }
 
 
@@ -205,7 +273,11 @@ def generate_sql(question: str) -> dict:
     if DESTRUCTIVE_SQL_RE.search(cleaned_question):
         return _refusal("Nao posso auxiliar com comandos destrutivos ou administrativos fora do escopo de suporte.")
 
-    result = _extract_json_content(_call_hermes(cleaned_question))
+    direct_result = _direct_update_all(cleaned_question)
+    if direct_result:
+        return direct_result
+
+    result = _extract_sql_content(_call_hermes(cleaned_question))
     sql = result["sql"]
     if not sql or not SQL_START_RE.search(sql):
         raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
