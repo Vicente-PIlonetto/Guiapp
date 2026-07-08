@@ -239,8 +239,6 @@ function App() {
     : selectedModule
       ? actionLabel[selectedModule.operation_type]
       : 'Iniciar';
-  const hasModificationSql = /\b(update|insert|delete)\b/i.test(sqlResult?.sql || '');
-
   return (
     <main className="shell">
       <nav className="app-tabs" aria-label="Areas">
@@ -414,12 +412,6 @@ function App() {
             {!sqlResult && <p className="muted">Nenhum SQL gerado.</p>}
             {sqlResult && (
               <>
-                {hasModificationSql && (
-                  <div className="risk-box">
-                    <ShieldAlert size={20} />
-                    <span>Script de alteracao. Revise, teste em homologacao e faca backup antes de usar.</span>
-                  </div>
-                )}
                 {sqlResult.warnings?.map((warning) => (
                   <div className="alert warning-box" key={warning}>
                     <AlertTriangle size={18} />
