@@ -14,6 +14,8 @@ DESTRUCTIVE_SQL_RE = re.compile(
 )
 MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
+UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 
 
 class SqlAssistantError(RuntimeError):
@@ -42,13 +44,25 @@ def _system_prompt() -> str:
         "Se a pergunta exigir informacao ausente no catalogo, nao invente: explique o que falta.\n"
         "Voce pode gerar SELECT, UPDATE, INSERT e DELETE. Para UPDATE, INSERT e DELETE, inclua aviso forte.\n"
         "Nao adicione WHERE 1=0, filtros falsos ou placeholders que mudem o efeito pedido pelo usuario.\n"
+        "Nao adicione WHERE 1=1 quando a intencao for todos os registros; deixe o UPDATE sem WHERE.\n"
         "UPDATE sem WHERE e valido quando o usuario pedir alteracao em massa/todos os registros; apenas avise o risco.\n"
         "Se uma condicao for necessaria mas nao foi informada, pergunte pela condicao em vez de criar uma condicao falsa.\n"
         "Recuse DROP, ALTER, TRUNCATE, CREATE DATABASE, EXECUTE BLOCK, GRANT, REVOKE e qualquer comando fora do escopo.\n"
+        "Retorne apenas um comando SQL, sem exemplos alternativos.\n"
+        "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n"
+        "A explicacao deve ter no maximo duas frases curtas.\n"
         "Responda exclusivamente como JSON valido no formato:\n"
         '{"sql":"...","explanation":"...","warnings":["..."]}\n\n'
         f"CATALOGO SMALL COMMERCE:\n{load_small_commerce_catalog()}"
     )
+
+
+def _single_line_sql(sql: str) -> str:
+    cleaned = " ".join(sql.replace(";", " ;").split()).replace(" ;", ";").strip()
+    match = UPDATE_WHERE_TRUE_RE.match(cleaned)
+    if match:
+        return match.group(1).rstrip() + ";"
+    return cleaned
 
 
 def _extract_json_content(content: str) -> dict:
@@ -60,8 +74,10 @@ def _extract_json_content(content: str) -> dict:
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
+        sql_match = SQL_BLOCK_RE.search(content)
+        sql = _single_line_sql(sql_match.group(1) if sql_match else content.strip())
         return {
-            "sql": content.strip(),
+            "sql": sql,
             "explanation": "O Hermes retornou texto fora do formato JSON esperado.",
             "warnings": ["Revise manualmente antes de usar."],
         }
@@ -75,7 +91,7 @@ def _extract_json_content(content: str) -> dict:
         warnings = []
 
     return {
-        "sql": str(parsed.get("sql") or "").strip(),
+        "sql": _single_line_sql(str(parsed.get("sql") or "")),
         "explanation": str(parsed.get("explanation") or "").strip(),
         "warnings": warnings,
     }
