@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, Copy, Database, Download, Loader2, Play, ShieldAlert, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Download, Loader2, Play, ShieldAlert, Sparkles } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || window.location.origin).replace(/\/$/, '');
@@ -249,14 +249,14 @@ function App() {
           className={`app-tab ${activeView === 'modules' ? 'active' : ''}`}
           onClick={() => setActiveView('modules')}
         >
-          <Database size={17} /> Modulos
+          Modulos
         </button>
         <button
           type="button"
           className={`app-tab ${activeView === 'sql' ? 'active' : ''}`}
           onClick={() => setActiveView('sql')}
         >
-          <Sparkles size={17} /> Assistente SQL
+          Assistente SQL (Beta)
         </button>
       </nav>
 
@@ -399,7 +399,7 @@ function App() {
               </div>
             )}
             <button className="primary" disabled={sqlLoading} onClick={generateSql}>
-              {sqlLoading ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
+              {sqlLoading && <Loader2 className="spin" size={18} />}
               {sqlLoading ? 'Gerando SQL' : 'Gerar SQL'}
             </button>
           </section>
