@@ -126,6 +126,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
         "Nunca execute SQL. Gere apenas texto para revisao humana.\n"
         "Use somente tabelas, colunas, relacionamentos e regras presentes no catalogo abaixo.\n"
+        "Use os nomes EXATOS do YAML. Nao adicione prefixos como TB_, TBL_ ou CAD_ se eles nao existirem no catalogo.\n"
         "Se a pergunta exigir informacao ausente no catalogo, nao invente: explique o que falta.\n"
         "Voce pode gerar SELECT, UPDATE, INSERT e DELETE. Para UPDATE, INSERT e DELETE, inclua aviso forte.\n"
         "Nao adicione WHERE 1=0, filtros falsos ou placeholders que mudem o efeito pedido pelo usuario.\n"
@@ -137,6 +138,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "Retorne apenas um comando SQL, sem exemplos alternativos e sem multiplos comandos.\n"
         "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n\n"
         "Regras de negocio do Small Commerce que devem ser aplicadas pela IA:\n"
+        "- Para produtos/itens/estoque, use a tabela ESTOQUE quando ela existir no catalogo; nao use TB_ESTOQUE se TB_ESTOQUE nao estiver no YAML.\n"
         "- Para localizar nota em VENDAS ou COMPRAS, use a coluna NUMERONF quando ela existir no catalogo.\n"
         "- Em VENDAS/COMPRAS, NUMERONF combina numero da nota com zeros a esquerda e serie com 3 digitos; exemplo nota 123 serie 1: '0000000123001'.\n"
         "- Para NFC-e/cupom, use a tabela e coluna reais do catalogo e formate a numeracao com ate 5 digitos; exemplo cupom 1: '00001'.\n"
@@ -237,6 +239,8 @@ def _validate_sql_against_catalog(sql: str) -> str:
     tables = _tables_in_sql(sql)
     for table in tables:
         if table not in columns_by_table:
+            if table.startswith("TB_") and table[3:] in columns_by_table:
+                return f"A tabela {table} nao existe no catalogo YAML; use exatamente {table[3:]}."
             return f"A tabela {table} nao existe no catalogo YAML enviado ao assistente."
 
     if not tables:
@@ -351,7 +355,7 @@ def generate_sql(question: str) -> dict:
 
     result = None
     validation_error = ""
-    for _attempt in range(2):
+    for _attempt in range(3):
         result = _extract_sql_content(_call_hermes(cleaned_question, validation_error))
         sql = result["sql"]
         if not sql or not SQL_START_RE.search(sql):
