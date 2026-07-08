@@ -3,14 +3,10 @@ from __future__ import annotations
 from argparse import ArgumentParser
 from pathlib import Path
 import os
+import shutil
+import subprocess
 import sys
-
-try:
-    from firebird.driver import connect, driver_config
-except ImportError as exc:
-    raise SystemExit(
-        "Dependencia ausente: instale com `python -m pip install -r requirements.txt`."
-    ) from exc
+import tempfile
 
 
 TYPE_NAMES = {
@@ -46,19 +42,21 @@ def format_type(field_type: int, length: int | None, scale: int | None, precisio
     return TYPE_NAMES.get(field_type, f"UNKNOWN({field_type})")
 
 
-def load_columns(database: str, user: str, password: str, charset: str) -> dict[str, list[dict]]:
-    query = """
+def metadata_query() -> str:
+    return """
+        SET LIST ON;
+        SET HEADING OFF;
+
         SELECT
-            TRIM(rf.RDB$RELATION_NAME) AS table_name,
-            TRIM(rf.RDB$FIELD_NAME) AS column_name,
-            rf.RDB$FIELD_POSITION AS position,
-            f.RDB$FIELD_TYPE AS field_type,
-            f.RDB$FIELD_LENGTH AS field_length,
-            f.RDB$FIELD_SCALE AS field_scale,
-            f.RDB$FIELD_PRECISION AS field_precision,
-            f.RDB$FIELD_SUB_TYPE AS field_subtype,
-            rf.RDB$NULL_FLAG AS null_flag,
-            TRIM(COALESCE(rf.RDB$DESCRIPTION, '')) AS description
+            TRIM(rf.RDB$RELATION_NAME) AS TABLE_NAME,
+            TRIM(rf.RDB$FIELD_NAME) AS COLUMN_NAME,
+            rf.RDB$FIELD_POSITION AS POSITION,
+            f.RDB$FIELD_TYPE AS FIELD_TYPE,
+            COALESCE(f.RDB$FIELD_LENGTH, 0) AS FIELD_LENGTH,
+            COALESCE(f.RDB$FIELD_SCALE, 0) AS FIELD_SCALE,
+            COALESCE(f.RDB$FIELD_PRECISION, 0) AS FIELD_PRECISION,
+            COALESCE(f.RDB$FIELD_SUB_TYPE, 0) AS FIELD_SUBTYPE,
+            COALESCE(rf.RDB$NULL_FLAG, 0) AS NULL_FLAG
         FROM RDB$RELATION_FIELDS rf
         JOIN RDB$FIELDS f
           ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
@@ -66,30 +64,83 @@ def load_columns(database: str, user: str, password: str, charset: str) -> dict[
           ON r.RDB$RELATION_NAME = rf.RDB$RELATION_NAME
         WHERE COALESCE(r.RDB$SYSTEM_FLAG, 0) = 0
           AND r.RDB$VIEW_BLR IS NULL
-        ORDER BY rf.RDB$RELATION_NAME, rf.RDB$FIELD_POSITION
+        ORDER BY rf.RDB$RELATION_NAME, rf.RDB$FIELD_POSITION;
     """
+
+
+def parse_isql_list_output(output: str) -> dict[str, list[dict]]:
     tables: dict[str, list[dict]] = {}
+    record: dict[str, str] = {}
+
+    def flush() -> None:
+        if not record.get("TABLE_NAME") or not record.get("COLUMN_NAME"):
+            return
+        table_name = record["TABLE_NAME"]
+        tables.setdefault(table_name, []).append(
+            {
+                "name": record["COLUMN_NAME"],
+                "type": format_type(
+                    int(record.get("FIELD_TYPE", "0")),
+                    int(record.get("FIELD_LENGTH", "0")),
+                    int(record.get("FIELD_SCALE", "0")),
+                    int(record.get("FIELD_PRECISION", "0")),
+                    int(record.get("FIELD_SUBTYPE", "0")),
+                ),
+                "nullable": record.get("NULL_FLAG", "0") != "1",
+                "description": "",
+            }
+        )
+
+    for raw_line in output.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            flush()
+            record = {}
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        key, value = parts
+        if key in {
+            "TABLE_NAME",
+            "COLUMN_NAME",
+            "POSITION",
+            "FIELD_TYPE",
+            "FIELD_LENGTH",
+            "FIELD_SCALE",
+            "FIELD_PRECISION",
+            "FIELD_SUBTYPE",
+            "NULL_FLAG",
+        }:
+            record[key] = value.strip()
+    flush()
+    return tables
+
+
+def load_columns(database: str, user: str, password: str, charset: str, isql_bin: str) -> dict[str, list[dict]]:
+    resolved_isql = shutil.which(isql_bin) if not Path(isql_bin).exists() else isql_bin
+    if not resolved_isql:
+        raise SystemExit("isql nao encontrado. Informe --isql-bin com o caminho completo do Firebird 2.5.")
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".sql", delete=False) as script:
+        script.write(metadata_query())
+        script_path = script.name
     try:
-        with connect(database=database, user=user, password=password, charset=charset) as con:
-            cur = con.cursor()
-            cur.execute(query)
-            for row in cur:
-                table_name = row[0]
-                tables.setdefault(table_name, []).append(
-                    {
-                        "name": row[1],
-                        "type": format_type(row[3], row[4], row[5], row[6], row[7]),
-                        "nullable": not bool(row[8]),
-                        "description": row[9] or "",
-                    }
-                )
-    except Exception as exc:
-        if "Firebird Client Library" in str(exc):
-            raise SystemExit(
-                "Biblioteca cliente do Firebird nao encontrada. Informe com "
-                "`--client-library /caminho/libfbclient.so` ou defina FIREBIRD_CLIENT_LIBRARY."
-            ) from exc
-        raise
+        completed = subprocess.run(
+            [resolved_isql, database, "-user", user, "-password", password, "-ch", charset, "-i", script_path],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    finally:
+        Path(script_path).unlink(missing_ok=True)
+
+    if completed.returncode != 0:
+        raise SystemExit(f"isql falhou com codigo {completed.returncode}:\n{completed.stdout}")
+    if "Statement failed" in completed.stdout or "SQL error" in completed.stdout:
+        raise SystemExit(f"isql retornou erro:\n{completed.stdout}")
+    tables = parse_isql_list_output(completed.stdout)
     return tables
 
 
@@ -132,13 +183,10 @@ def main() -> int:
     parser.add_argument("--password", default="masterkey")
     parser.add_argument("--charset", default="UTF8")
     parser.add_argument("--output", default="backend/sql_assistant/small_commerce_schema.yaml")
-    parser.add_argument("--client-library", default=os.getenv("FIREBIRD_CLIENT_LIBRARY", ""))
+    parser.add_argument("--isql-bin", default=os.getenv("ISQL_BIN", "isql"))
     args = parser.parse_args()
 
-    if args.client_library:
-        driver_config.fb_client_library.value = args.client_library
-
-    tables = load_columns(args.database, args.user, args.password, args.charset)
+    tables = load_columns(args.database, args.user, args.password, args.charset, args.isql_bin)
     if not tables:
         raise SystemExit("Nenhuma tabela de usuario encontrada.")
 
