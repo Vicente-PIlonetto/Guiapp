@@ -35,6 +35,7 @@ class JobStartRequest(BaseModel):
 
 
 UPLOAD_TTL_SECONDS = 5 * 60
+LOGO_JOB_TTL_SECONDS = 5 * 60
 
 
 @app.on_event("startup")
@@ -71,6 +72,11 @@ def upload_dir(upload_id: str) -> Path:
 async def cleanup_upload_later(upload_id: str) -> None:
     await asyncio.sleep(UPLOAD_TTL_SECONDS)
     shutil.rmtree(upload_dir(upload_id), ignore_errors=True)
+
+
+async def cleanup_job_artifacts_later(job_id: str, delay_seconds: int) -> None:
+    await asyncio.sleep(delay_seconds)
+    cleanup_job_artifacts(job_id)
 
 
 def cleanup_job_artifacts(job_id: str) -> None:
@@ -226,6 +232,8 @@ def create_job_from_upload(
     job.add_log("Upload recebido e validado.")
     add_job(job)
     background_tasks.add_task(run_job, job, module, upload_path)
+    if module.runner == "logo_adjustment":
+        background_tasks.add_task(cleanup_job_artifacts_later, job_id, LOGO_JOB_TTL_SECONDS)
     return {"job_id": job_id}
 
 
@@ -268,6 +276,8 @@ async def create_job(
     job.add_log("Upload recebido e validado.")
     add_job(job)
     background_tasks.add_task(run_job, job, module, upload_path)
+    if module.runner == "logo_adjustment":
+        background_tasks.add_task(cleanup_job_artifacts_later, job_id, LOGO_JOB_TTL_SECONDS)
     return {"job_id": job_id}
 
 

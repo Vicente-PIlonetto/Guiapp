@@ -56,6 +56,17 @@ MODULES: dict[str, ModuleDefinition] = {
         generates_output_file=False,
         runner="analise_xml_nfce",
     ),
+    "ajuste-logos": ModuleDefinition(
+        id="ajuste-logos",
+        name="Ajuste de Logos",
+        description="Recebe uma imagem e gera automaticamente as logos nos tamanhos exigidos.",
+        operation_type="correction",
+        accepted_extensions=(".bmp", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".tif", ".tiff"),
+        requires_confirmation=False,
+        generates_report=False,
+        generates_output_file=True,
+        runner="logo_adjustment",
+    ),
 }
 
 

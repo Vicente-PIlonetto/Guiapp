@@ -6,6 +6,8 @@ import subprocess
 import textwrap
 import zipfile
 
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from backend.config import get_settings
 from backend.models import Job, ModuleDefinition
 from backend.storage import copy_to, job_dirs
@@ -444,6 +446,8 @@ def run_job(job: Job, module: ModuleDefinition, uploaded_file: Path) -> None:
             _run_autoexec(job, uploaded_file, paths)
         elif module.runner == "firebird_repair":
             _run_firebird_repair(job, uploaded_file, paths)
+        elif module.runner == "logo_adjustment":
+            _run_logo_adjustment(job, uploaded_file, paths)
         else:
             raise RunnerError("Modulo sem runner executavel.")
         job.status = "completed"
@@ -623,3 +627,47 @@ def _run_firebird_repair(job: Job, uploaded_file: Path, paths: dict[str, Path]) 
     job.output_path = package
     job.report_path = paths["log"]
     job.result = "Base Firebird reparada em copia isolada."
+
+
+def _save_resized_logo(source: Image.Image, output_path: Path, width: int, height: int) -> Path:
+    canvas = Image.new("RGB", (width, height), "white")
+    working = source.copy()
+    working.thumbnail((width, height), Image.Resampling.LANCZOS)
+    x = (width - working.width) // 2
+    y = (height - working.height) // 2
+
+    rgba = working.convert("RGBA")
+    canvas.paste(rgba, (x, y), rgba.getchannel("A"))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.suffix.lower() in {".jpg", ".jpeg"}:
+        canvas.save(output_path, "JPEG", quality=95)
+    else:
+        canvas.save(output_path, "BMP")
+    return output_path
+
+
+def _run_logo_adjustment(job: Job, uploaded_file: Path, paths: dict[str, Path]) -> None:
+    outputs = [
+        ("logofrente.bmp", 350, 350),
+        ("logonfse.jpg", 100, 100),
+        ("logonfe.bmp", 530, 340),
+        ("logopaf.bmp", 332, 278),
+        ("LOGOTIP.BMP", 360, 90),
+        ("logotip.jpg", 360, 90),
+    ]
+
+    try:
+        with Image.open(uploaded_file) as raw_image:
+            image = ImageOps.exif_transpose(raw_image)
+            image.load()
+    except UnidentifiedImageError as exc:
+        raise RunnerError("Imagem invalida ou formato nao suportado.") from exc
+
+    output_dir = paths["processing"] / "SAIDA"
+    generated = [
+        _save_resized_logo(image, output_dir / filename, width, height)
+        for filename, width, height in outputs
+    ]
+    job.output_path = _zip_files(paths["result"] / "logos_ajustadas.zip", generated, output_dir)
+    job.result = "Logos ajustadas e compactadas. O arquivo ficara disponivel por 5 minutos."

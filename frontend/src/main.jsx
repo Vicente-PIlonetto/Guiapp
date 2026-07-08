@@ -192,6 +192,11 @@ function App() {
       : file
         ? 'Aguardando upload.'
         : '';
+  const runLabel = selectedModule?.id === 'ajuste-logos'
+    ? 'Ajustar logos'
+    : selectedModule
+      ? actionLabel[selectedModule.operation_type]
+      : 'Iniciar';
 
   return (
     <main className="shell">
@@ -278,7 +283,7 @@ function App() {
 
           <button className="primary" disabled={!canRun} onClick={submit}>
             {busy || uploading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            {uploading ? 'Enviando arquivo' : selectedModule ? actionLabel[selectedModule.operation_type] : 'Iniciar'}
+            {uploading ? 'Enviando arquivo' : runLabel}
           </button>
         </section>
 
