@@ -32,6 +32,7 @@ NUMBER_WORDS = {
     "TRES": 3,
     "TRÊS": 3,
 }
+LOOKUP_TERMS = ("LOCALIZ", "BUSC", "PROCUR", "ACH", "SELECT", "CONSULT")
 
 
 class SqlAssistantError(RuntimeError):
@@ -187,29 +188,56 @@ def _generator_command(question: str) -> dict | None:
     }
 
 
-def _direct_vendas_numeronf_lookup(question: str) -> dict | None:
+def _parse_series(question: str) -> int:
     upper_question = question.upper()
-    if "VENDAS" not in upper_question:
-        return None
-    if not any(term in upper_question for term in ("LOCALIZ", "BUSC", "PROCUR", "ACH", "SELECT", "CONSULT")):
-        return None
-
-    nota_match = re.search(r"\b(?:NOTA|NF|NUMERONF)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
     serie_match = re.search(r"\bSERIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b|\bSÉRIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b", upper_question)
-    if not nota_match or not serie_match:
-        return None
-
-    nota = nota_match.group(1)
-    serie_raw = next((group for group in serie_match.groups() if group), "")
+    serie_raw = next((group for group in (serie_match.groups() if serie_match else []) if group), "")
     if not serie_raw:
+        return 0
+    return NUMBER_WORDS.get(serie_raw, int(serie_raw) if serie_raw.isdigit() else 0)
+
+
+def _find_catalog_table(table_terms: tuple[str, ...]) -> tuple[str, str]:
+    for table_name, block in catalog_table_blocks():
+        if any(term in table_name for term in table_terms):
+            return table_name, block
+    return "", ""
+
+
+def _direct_document_lookup(question: str) -> dict | None:
+    upper_question = question.upper()
+    if not any(term in upper_question for term in LOOKUP_TERMS):
         return None
 
-    serie = NUMBER_WORDS.get(serie_raw, int(serie_raw) if serie_raw.isdigit() else 0)
-    if not serie:
+    for table_name in ("VENDAS", "COMPRAS"):
+        if table_name not in upper_question:
+            continue
+        nota_match = re.search(r"\b(?:NOTA|NF|NUMERONF|NUMERO|N[ºO]|NRO)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
+        serie = _parse_series(question)
+        if not nota_match or not serie:
+            return None
+        numeronf = f"{int(nota_match.group(1)):010d}{serie:03d}"
+        return {
+            "sql": f"SELECT * FROM {table_name} WHERE NUMERONF = '{numeronf}';",
+            "explanation": "",
+            "warnings": [],
+        }
+
+    if not re.search(r"\b(NFC\s*-?\s*E|NFCE|CUPOM)\b", upper_question):
         return None
-    numeronf = f"{int(nota):010d}{serie:03d}"
+    number_match = re.search(r"\b(?:CUPOM|NFC\s*-?\s*E|NFCE|NUMERO|N[ºO]|NRO)\s*(?:NUMERO|N[ºO]|NRO)?\s*(\d+)\b", upper_question)
+    if not number_match:
+        return None
+    table_name, table_block = _find_catalog_table(("NFCE", "NFC_E", "NFC"))
+    if not table_name:
+        table_name = "NFCE"
+    columns = _table_columns(table_block) if table_block else []
+    column_name = next(
+        (column for column in ("NUMERO", "NUMERONFCE", "NUMERONF", "CUPOM", "NUM_CUPOM") if column in columns),
+        "NUMERO",
+    )
     return {
-        "sql": f"SELECT * FROM VENDAS WHERE NUMERONF = '{numeronf}';",
+        "sql": f"SELECT * FROM {table_name} WHERE {column_name} = '{int(number_match.group(1)):05d}';",
         "explanation": "",
         "warnings": [],
     }
@@ -404,9 +432,9 @@ def generate_sql(question: str) -> dict:
     if direct_result:
         return direct_result
 
-    vendas_lookup = _direct_vendas_numeronf_lookup(cleaned_question)
-    if vendas_lookup:
-        return vendas_lookup
+    document_lookup = _direct_document_lookup(cleaned_question)
+    if document_lookup:
+        return document_lookup
 
     generator_result = _generator_command(cleaned_question)
     if generator_result:
