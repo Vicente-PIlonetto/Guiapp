@@ -17,12 +17,13 @@ JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re
 SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
 SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE)\b[\s\S]*?(?:;|$)", re.IGNORECASE)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
-SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
+SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 VALUE_RE = re.compile(
     r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|VALOR|COMO|PARA)(?:\s+DE)?\s+['\"]?([A-Z0-9._-]+)['\"]?",
     re.IGNORECASE,
 )
+NUMBER_RE = re.compile(r"\b(\d+)\b")
 
 
 class SqlAssistantError(RuntimeError):
@@ -97,6 +98,18 @@ def _table_aliases() -> dict[str, tuple[str, ...]]:
     }
 
 
+def _known_estoque_columns() -> set[str]:
+    return {
+        "CFOP",
+        "CEST",
+        "CSOSN",
+        "CSOSN_NFCE",
+        "CST_ICMS",
+        "CST_NFCE",
+        "NCM",
+    }
+
+
 def _column_type(table_block: str, column_name: str) -> str:
     match = re.search(rf"^\s+{re.escape(column_name)}:\s+\{{type:\s+\"([^\"]+)\"", table_block, re.MULTILINE)
     return match.group(1) if match else ""
@@ -122,6 +135,45 @@ def _find_column_mentions(question: str, columns: list[str]) -> list[tuple[int, 
             occupied.append(span)
             mentions.append((span[0], span[1], column))
     return sorted(mentions)
+
+
+def _generator_command(question: str) -> dict | None:
+    upper_question = question.upper()
+    numbers = [int(match.group(1)) for match in NUMBER_RE.finditer(question)]
+    if not numbers:
+        return None
+
+    generator = ""
+    if re.search(r"\bOS\b|ORDEM\s+DE\s+SERVICO|ORDEM\s+DE\s+SERVIÇO", upper_question):
+        generator = "G_NUMEROOS"
+    elif "ORCAMENTO" in upper_question or "ORÇAMENTO" in upper_question:
+        generator = "G_ORCAMENTO"
+    elif "NFC" in upper_question:
+        generator = "G_NUMERONFCE"
+    elif "MDF" in upper_question:
+        generator = "G_MDFENUMERO"
+    elif "CFE" in upper_question or "CF-E" in upper_question or "SAT" in upper_question:
+        caixa_match = re.search(r"\b(?:CAIXA|PDV)\s*(\d+)\b", upper_question)
+        if not caixa_match:
+            raise SqlAssistantError("Informe o numero do caixa para gerar o generator CFE-SAT.")
+        generator = f"G_NUMEROCFESAT_{caixa_match.group(1)}"
+    elif re.search(r"\bNF\b|NOTA\s+FISCAL", upper_question):
+        serie_match = re.search(r"\bSERIE\s*(\d+)\b|\bSÉRIE\s*(\d+)\b", upper_question)
+        serie = next((group for group in (serie_match.groups() if serie_match else []) if group), "1")
+        generator = f"G_SERIE{serie}"
+
+    if not generator:
+        return None
+
+    value = numbers[-1]
+    if any(term in upper_question for term in ("INICIAR", "COMEÇAR", "COMECAR", "PROXIMA", "PRÓXIMA", "PROXIMO", "PRÓXIMO")):
+        value = max(0, value - 1)
+
+    return {
+        "sql": f"SET GENERATOR {generator} TO {value};",
+        "explanation": "",
+        "warnings": ["Generator: use o numero anterior ao documento que deve iniciar."],
+    }
 
 
 def _format_sql_value(raw_value: str, column_type: str) -> str:
@@ -153,7 +205,8 @@ def _direct_update_all(question: str) -> dict | None:
         if not table_block:
             continue
         assignments: list[str] = []
-        mentions = _find_column_mentions(question, _table_columns(table_block))
+        known_columns = sorted(set(_table_columns(table_block)) | _known_estoque_columns())
+        mentions = _find_column_mentions(question, known_columns)
         for index, (_, end, column) in enumerate(mentions):
             next_start = mentions[index + 1][0] if index + 1 < len(mentions) else len(question)
             segment = question[end:next_start]
@@ -311,6 +364,10 @@ def generate_sql(question: str) -> dict:
     direct_result = _direct_update_all(cleaned_question)
     if direct_result:
         return direct_result
+
+    generator_result = _generator_command(cleaned_question)
+    if generator_result:
+        return generator_result
 
     result = _extract_sql_content(_call_hermes(cleaned_question))
     sql = result["sql"]

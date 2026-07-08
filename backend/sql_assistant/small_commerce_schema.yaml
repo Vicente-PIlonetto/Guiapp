@@ -18,11 +18,22 @@ rules:
   - Nao use WHERE 1=1 para alteracao em massa; gere UPDATE sem WHERE quando todos os registros devem ser alterados.
   - Gere comandos SQL em linha unica para uso direto no Small Commerce.
   - UPDATE sem WHERE e valido quando a solicitacao pedir todos os registros, mas deve trazer aviso de risco.
+  - Para generators, use SET GENERATOR em linha unica e coloque o numero anterior ao documento que deve iniciar.
+
+generators:
+  OS: G_NUMEROOS
+  NF_SERIE_1: G_SERIE1
+  NF_SERIE_2: G_SERIE2
+  ORCAMENTO: G_ORCAMENTO
+  NFCE: G_NUMERONFCE
+  CFE_SAT: G_NUMEROCFESAT_XXX
+  MDFE: G_MDFENUMERO
 
 tables:
   ESTOQUE:
     description: Cadastro/estoque de produtos do Small Commerce.
     columns:
+      CST_ICMS: Codigo CST ICMS usado nos itens/produtos.
       CST_NFCE: Codigo CST usado para NFC-e nos itens/produtos.
       CSOSN: Codigo CSOSN usado para itens/produtos no regime Simples Nacional.
       CSOSN_NFCE: Codigo CSOSN usado para NFC-e nos itens/produtos.
