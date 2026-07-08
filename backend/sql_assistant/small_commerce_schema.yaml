@@ -25,6 +25,7 @@ tables:
     columns:
       CST_NFCE: Codigo CST usado para NFC-e nos itens/produtos.
       CSOSN: Codigo CSOSN usado para itens/produtos no regime Simples Nacional.
+      CSOSN_NFCE: Codigo CSOSN usado para NFC-e nos itens/produtos.
     examples:
       - request: Definir CST_NFCE como 00 para todos os itens do estoque.
         sql: UPDATE ESTOQUE SET CST_NFCE = '00';

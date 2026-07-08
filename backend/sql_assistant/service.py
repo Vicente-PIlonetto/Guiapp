@@ -102,6 +102,28 @@ def _column_type(table_block: str, column_name: str) -> str:
     return match.group(1) if match else ""
 
 
+def _table_columns(table_block: str) -> list[str]:
+    return re.findall(r"^      ([A-Z0-9_]+):", table_block, re.MULTILINE)
+
+
+def _column_mention_pattern(column_name: str) -> re.Pattern[str]:
+    parts = [re.escape(part) for part in column_name.split("_") if part]
+    return re.compile(r"\b" + r"[\s_]*".join(parts) + r"\b", re.IGNORECASE)
+
+
+def _find_column_mentions(question: str, columns: list[str]) -> list[tuple[int, int, str]]:
+    mentions: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for column in sorted(columns, key=len, reverse=True):
+        for match in _column_mention_pattern(column).finditer(question):
+            span = match.span()
+            if any(not (span[1] <= used[0] or span[0] >= used[1]) for used in occupied):
+                continue
+            occupied.append(span)
+            mentions.append((span[0], span[1], column))
+    return sorted(mentions)
+
+
 def _format_sql_value(raw_value: str, column_type: str) -> str:
     if any(kind in column_type.upper() for kind in ("CHAR", "VARCHAR", "DATE", "TIME", "BLOB")):
         return "'" + raw_value.replace("'", "''") + "'"
@@ -130,17 +152,30 @@ def _direct_update_all(question: str) -> dict | None:
         table_block = next((block for candidate, block in catalog_table_blocks() if candidate == table_name), "")
         if not table_block:
             continue
-        for token in sorted(tokens, key=len, reverse=True):
-            if re.search(rf"^      {re.escape(token)}:", table_block, re.MULTILINE):
-                column_type = _column_type(table_block, token)
-                if not column_type and token in {"CSOSN", "CST_NFCE", "CST_ICMS", "CFOP", "NCM", "CEST"}:
+        assignments: list[str] = []
+        mentions = _find_column_mentions(question, _table_columns(table_block))
+        for index, (_, end, column) in enumerate(mentions):
+            next_start = mentions[index + 1][0] if index + 1 < len(mentions) else len(question)
+            segment = question[end:next_start]
+            segment_values = [
+                match.group(1)
+                for match in VALUE_RE.finditer(segment)
+                if match.group(1).upper() not in ignored_values
+            ]
+            if not segment_values:
+                continue
+            raw_column_value = segment_values[-1]
+            column_type = _column_type(table_block, column)
+            if not column_type and column in {"CSOSN", "CSOSN_NFCE", "CST_NFCE", "CST_ICMS", "CFOP", "NCM", "CEST"}:
                     column_type = "VARCHAR"
-                value = _format_sql_value(raw_value, column_type)
-                return {
-                    "sql": f"UPDATE {table_name} SET {token} = {value};",
-                    "explanation": "",
-                    "warnings": ["Script de alteracao: revise, teste em homologacao e faca backup antes de usar."],
-                }
+            value = _format_sql_value(raw_column_value, column_type)
+            assignments.append(f"{column} = {value}")
+        if assignments:
+            return {
+                "sql": f"UPDATE {table_name} SET {', '.join(assignments)};",
+                "explanation": "",
+                "warnings": ["Script de alteracao: revise, teste em homologacao e faca backup antes de usar."],
+            }
     return None
 
 
