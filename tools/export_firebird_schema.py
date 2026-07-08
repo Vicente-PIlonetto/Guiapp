@@ -50,7 +50,7 @@ def metadata_query() -> str:
         SELECT
             TRIM(rf.RDB$RELATION_NAME) AS TABLE_NAME,
             TRIM(rf.RDB$FIELD_NAME) AS COLUMN_NAME,
-            rf.RDB$FIELD_POSITION AS POSITION,
+            rf.RDB$FIELD_POSITION AS FIELD_POSITION,
             f.RDB$FIELD_TYPE AS FIELD_TYPE,
             COALESCE(f.RDB$FIELD_LENGTH, 0) AS FIELD_LENGTH,
             COALESCE(f.RDB$FIELD_SCALE, 0) AS FIELD_SCALE,
@@ -104,7 +104,7 @@ def parse_isql_list_output(output: str) -> dict[str, list[dict]]:
         if key in {
             "TABLE_NAME",
             "COLUMN_NAME",
-            "POSITION",
+            "FIELD_POSITION",
             "FIELD_TYPE",
             "FIELD_LENGTH",
             "FIELD_SCALE",
