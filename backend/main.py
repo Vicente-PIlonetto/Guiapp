@@ -16,6 +16,7 @@ from backend.job_store import add_job, get_job
 from backend.models import Job
 from backend.module_registry import get_module, list_modules
 from backend.runners import run_job
+from backend.sql_assistant.service import SqlAssistantError, generate_sql
 from backend.storage import cleanup_startup_storage, ensure_storage, job_dirs, safe_display_name
 
 app = FastAPI(title="GUINAPP", version="0.1.0")
@@ -32,6 +33,16 @@ class JobStartRequest(BaseModel):
     module_id: str
     confirmation: bool = False
     upload_id: str
+
+
+class SqlAssistantRequest(BaseModel):
+    question: str
+
+
+class SqlAssistantResponse(BaseModel):
+    sql: str
+    explanation: str
+    warnings: list[str]
 
 
 UPLOAD_TTL_SECONDS = 5 * 60
@@ -61,6 +72,14 @@ def public_config() -> dict:
 @app.get("/api/modules")
 def modules() -> dict:
     return {"modules": list_modules()}
+
+
+@app.post("/api/sql-assistant/generate", response_model=SqlAssistantResponse)
+def sql_assistant_generate(payload: SqlAssistantRequest) -> dict:
+    try:
+        return generate_sql(payload.question)
+    except SqlAssistantError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def upload_dir(upload_id: str) -> Path:

@@ -18,6 +18,10 @@ class Settings:
     gbak_bin = os.getenv("GBAK_BIN", "gbak")
     firebird_user = os.getenv("FIREBIRD_USER", "SYSDBA")
     firebird_password = os.getenv("FIREBIRD_PASSWORD", "masterkey")
+    hermes_api_url = os.getenv("HERMES_API_URL", "")
+    hermes_api_key = os.getenv("HERMES_API_KEY", "")
+    hermes_model = os.getenv("HERMES_MODEL", "")
+    hermes_timeout_seconds = int(os.getenv("HERMES_TIMEOUT_SECONDS", "60"))
 
     @property
     def storage_path(self) -> Path:

@@ -1,0 +1,25 @@
+# Catalogo controlado do Small Commerce para o Assistente SQL.
+#
+# Substitua e expanda este arquivo com as tabelas, colunas, relacionamentos
+# e regras reais do Small Commerce. O assistente deve usar somente o que
+# estiver descrito aqui.
+
+database:
+  engine: Firebird
+  product: Small Commerce
+
+rules:
+  - Gere SQL apenas para o banco Firebird do Small Commerce.
+  - Use somente tabelas e colunas presentes neste catalogo.
+  - Quando faltar informacao, explique a premissa ou peca mais contexto.
+  - Nao gere comandos DROP, ALTER, CREATE DATABASE, EXECUTE BLOCK, GRANT ou REVOKE.
+  - UPDATE, INSERT e DELETE sao permitidos somente como scripts para revisao humana.
+
+tables:
+  # Exemplo de preenchimento esperado:
+  # CLIENTES:
+  #   description: Cadastro de clientes.
+  #   columns:
+  #     ID_CLIENTE: Chave primaria do cliente.
+  #     NOME: Nome do cliente.
+  #   relationships: []

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, Download, Loader2, Play, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Database, Download, Loader2, Play, ShieldAlert, Sparkles } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || window.location.origin).replace(/\/$/, '');
@@ -13,6 +13,7 @@ const actionLabel = {
 };
 
 function App() {
+  const [activeView, setActiveView] = useState('modules');
   const [modules, setModules] = useState([]);
   const [moduleId, setModuleId] = useState('');
   const [file, setFile] = useState(null);
@@ -22,6 +23,11 @@ function App() {
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState({ active: false, progress: 0, complete: false, id: null });
   const [config, setConfig] = useState(null);
+  const [sqlQuestion, setSqlQuestion] = useState('');
+  const [sqlResult, setSqlResult] = useState(null);
+  const [sqlLoading, setSqlLoading] = useState(false);
+  const [sqlError, setSqlError] = useState('');
+  const [copiedSql, setCopiedSql] = useState(false);
   const inputRef = useRef(null);
   const uploadSeqRef = useRef(0);
 
@@ -180,6 +186,42 @@ function App() {
     });
   }
 
+  async function generateSql() {
+    const question = sqlQuestion.trim();
+    if (!question) {
+      setSqlError('Descreva o que precisa consultar ou ajustar.');
+      return;
+    }
+
+    setSqlLoading(true);
+    setSqlError('');
+    setSqlResult(null);
+    setCopiedSql(false);
+    try {
+      const response = await fetch(`${API_BASE}/api/sql-assistant/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || 'Falha ao chamar o assistente SQL.');
+      }
+      setSqlResult(data);
+    } catch (assistantError) {
+      setSqlError(assistantError.message);
+    } finally {
+      setSqlLoading(false);
+    }
+  }
+
+  async function copySql() {
+    if (!sqlResult?.sql) return;
+    await navigator.clipboard.writeText(sqlResult.sql);
+    setCopiedSql(true);
+    window.setTimeout(() => setCopiedSql(false), 1800);
+  }
+
   const busy = job?.status === 'pending' || job?.status === 'processing';
   const uploading = upload.active;
   const canRun = selectedModule?.enabled && file && upload.complete && upload.id && !busy && !uploading;
@@ -197,125 +239,200 @@ function App() {
     : selectedModule
       ? actionLabel[selectedModule.operation_type]
       : 'Iniciar';
+  const hasModificationSql = /\b(update|insert|delete)\b/i.test(sqlResult?.sql || '');
 
   return (
     <main className="shell">
-      <nav className="module-tabs" aria-label="Modulos">
-        {modules.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`module-tab ${item.id === moduleId ? 'active' : ''}`}
-            disabled={!item.enabled}
-            onClick={() => selectModule(item.id)}
-            title={item.disabled_reason || item.name}
-          >
-            <span>{item.name}</span>
-          </button>
-        ))}
+      <nav className="app-tabs" aria-label="Areas">
+        <button
+          type="button"
+          className={`app-tab ${activeView === 'modules' ? 'active' : ''}`}
+          onClick={() => setActiveView('modules')}
+        >
+          <Database size={17} /> Modulos
+        </button>
+        <button
+          type="button"
+          className={`app-tab ${activeView === 'sql' ? 'active' : ''}`}
+          onClick={() => setActiveView('sql')}
+        >
+          <Sparkles size={17} /> Assistente SQL
+        </button>
       </nav>
 
-      <section className="workspace">
-        <section className="upload-area">
-          <div
-            className={`dropzone ${dragging ? 'dragging' : ''}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={onDrop}
-            onClick={() => inputRef.current?.click()}
-          >
-            <h1>{file ? file.name : 'Selecionar arquivo'}</h1>
-            <p>
-              {selectedModule
-                ? `Aceito: ${selectedModule.accepted_extensions.join(', ')}`
-                : 'Selecione um modulo'}
-            </p>
-            {config && <p>Limite: {config.max_upload_gb} GB</p>}
-            <button type="button" className="secondary">Selecionar arquivo</button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept={selectedModule?.accepted_extensions.join(',')}
-              hidden
-              onChange={(event) => {
-                const nextFile = event.target.files?.[0];
-                if (nextFile) acceptFile(nextFile);
-              }}
-            />
-          </div>
+      {activeView === 'modules' && (
+        <>
+          <nav className="module-tabs" aria-label="Modulos">
+            {modules.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`module-tab ${item.id === moduleId ? 'active' : ''}`}
+                disabled={!item.enabled}
+                onClick={() => selectModule(item.id)}
+                title={item.disabled_reason || item.name}
+              >
+                <span>{item.name}</span>
+              </button>
+            ))}
+          </nav>
 
-          {file && (
-            <div className="upload-progress" aria-live="polite">
-              <div className="progress-row">
-                <span>{uploadStatus}</span>
-                <span>{upload.complete ? '100%' : `${upload.progress}%`}</span>
-              </div>
-              <div className="progress-track" aria-hidden="true">
-                <div
-                  className={`progress-fill ${upload.active ? 'active' : ''}`}
-                  style={{ width: `${upload.complete ? 100 : upload.progress}%` }}
+          <section className="workspace">
+            <section className="upload-area">
+              <div
+                className={`dropzone ${dragging ? 'dragging' : ''}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={onDrop}
+                onClick={() => inputRef.current?.click()}
+              >
+                <h1>{file ? file.name : 'Selecionar arquivo'}</h1>
+                <p>
+                  {selectedModule
+                    ? `Aceito: ${selectedModule.accepted_extensions.join(', ')}`
+                    : 'Selecione um modulo'}
+                </p>
+                {config && <p>Limite: {config.max_upload_gb} GB</p>}
+                <button type="button" className="secondary">Selecionar arquivo</button>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept={selectedModule?.accepted_extensions.join(',')}
+                  hidden
+                  onChange={(event) => {
+                    const nextFile = event.target.files?.[0];
+                    if (nextFile) acceptFile(nextFile);
+                  }}
                 />
               </div>
-            </div>
-          )}
 
-          {selectedModule?.requires_confirmation && (
-            <label className="risk-box">
-              <input
-                type="checkbox"
-                checked={confirmation}
-                onChange={(event) => setConfirmation(event.target.checked)}
-              />
-              <ShieldAlert size={20} />
-              <span>Confirmo que o reparo sera feito em copia isolada e que um backup sera criado antes da operacao.</span>
-            </label>
-          )}
+              {file && (
+                <div className="upload-progress" aria-live="polite">
+                  <div className="progress-row">
+                    <span>{uploadStatus}</span>
+                    <span>{upload.complete ? '100%' : `${upload.progress}%`}</span>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className={`progress-fill ${upload.active ? 'active' : ''}`}
+                      style={{ width: `${upload.complete ? 100 : upload.progress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
-          {error && (
-            <div className="alert">
-              <AlertTriangle size={18} />
-              {error}
-            </div>
-          )}
+              {selectedModule?.requires_confirmation && (
+                <label className="risk-box">
+                  <input
+                    type="checkbox"
+                    checked={confirmation}
+                    onChange={(event) => setConfirmation(event.target.checked)}
+                  />
+                  <ShieldAlert size={20} />
+                  <span>Confirmo que o reparo sera feito em copia isolada e que um backup sera criado antes da operacao.</span>
+                </label>
+              )}
 
-          <button className="primary" disabled={!canRun} onClick={submit}>
-            {busy || uploading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            {uploading ? 'Enviando arquivo' : runLabel}
-          </button>
-        </section>
+              {error && (
+                <div className="alert">
+                  <AlertTriangle size={18} />
+                  {error}
+                </div>
+              )}
 
-        <section className="result-panel">
-          <h2>Status</h2>
-          {!job && <p className="muted">Nenhum processamento iniciado.</p>}
-          {job && (
-            <>
-              <div className={`job-status ${job.status}`}>
-                {job.status === 'completed' ? <CheckCircle2 size={18} /> : <Loader2 className={busy ? 'spin' : ''} size={18} />}
-                {job.status}
+              <button className="primary" disabled={!canRun} onClick={submit}>
+                {busy || uploading ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+                {uploading ? 'Enviando arquivo' : runLabel}
+              </button>
+            </section>
+
+            <section className="result-panel">
+              <h2>Status</h2>
+              {!job && <p className="muted">Nenhum processamento iniciado.</p>}
+              {job && (
+                <>
+                  <div className={`job-status ${job.status}`}>
+                    {job.status === 'completed' ? <CheckCircle2 size={18} /> : <Loader2 className={busy ? 'spin' : ''} size={18} />}
+                    {job.status}
+                  </div>
+                  {job.result && <p className="result">{job.result}</p>}
+                  {job.error && <p className="warning">{job.error}</p>}
+                  {busy && <p className="muted">Processando arquivo. Os downloads aparecem quando a execucao terminar.</p>}
+
+                  <div className="downloads">
+                    {job.has_report && (
+                      <a href={`${API_BASE}/api/jobs/${job.id}/report`}>
+                        <Download size={16} /> Baixar relatorio
+                      </a>
+                    )}
+                    {job.has_output && (
+                      <a href={`${API_BASE}/api/jobs/${job.id}/output`}>
+                        <Download size={16} /> Baixar arquivo
+                      </a>
+                    )}
+                  </div>
+                </>
+              )}
+            </section>
+          </section>
+        </>
+      )}
+
+      {activeView === 'sql' && (
+        <section className="sql-workspace">
+          <section className="sql-composer">
+            <label htmlFor="sql-question">Solicitacao</label>
+            <textarea
+              id="sql-question"
+              value={sqlQuestion}
+              onChange={(event) => setSqlQuestion(event.target.value)}
+              placeholder="Ex.: listar vendas canceladas de hoje com cliente e valor total"
+              rows={8}
+            />
+            {sqlError && (
+              <div className="alert">
+                <AlertTriangle size={18} />
+                {sqlError}
               </div>
-              {job.result && <p className="result">{job.result}</p>}
-              {job.error && <p className="warning">{job.error}</p>}
-              {busy && <p className="muted">Processando arquivo. Os downloads aparecem quando a execucao terminar.</p>}
+            )}
+            <button className="primary" disabled={sqlLoading} onClick={generateSql}>
+              {sqlLoading ? <Loader2 className="spin" size={18} /> : <Sparkles size={18} />}
+              {sqlLoading ? 'Gerando SQL' : 'Gerar SQL'}
+            </button>
+          </section>
 
-              <div className="downloads">
-                {job.has_report && (
-                  <a href={`${API_BASE}/api/jobs/${job.id}/report`}>
-                    <Download size={16} /> Baixar relatorio
-                  </a>
+          <section className="sql-result">
+            <div className="sql-result-header">
+              <h2>Resultado</h2>
+              <button className="secondary" disabled={!sqlResult?.sql} onClick={copySql}>
+                <Copy size={16} /> {copiedSql ? 'Copiado' : 'Copiar'}
+              </button>
+            </div>
+            {!sqlResult && <p className="muted">Nenhum SQL gerado.</p>}
+            {sqlResult && (
+              <>
+                {hasModificationSql && (
+                  <div className="risk-box">
+                    <ShieldAlert size={20} />
+                    <span>Script de alteracao. Revise, teste em homologacao e faca backup antes de usar.</span>
+                  </div>
                 )}
-                {job.has_output && (
-                  <a href={`${API_BASE}/api/jobs/${job.id}/output`}>
-                    <Download size={16} /> Baixar arquivo
-                  </a>
-                )}
-              </div>
-            </>
-          )}
+                {sqlResult.warnings?.map((warning) => (
+                  <div className="alert warning-box" key={warning}>
+                    <AlertTriangle size={18} />
+                    {warning}
+                  </div>
+                ))}
+                <pre className="sql-code">{sqlResult.sql || '-- Sem SQL gerado.'}</pre>
+                {sqlResult.explanation && <p className="sql-explanation">{sqlResult.explanation}</p>}
+              </>
+            )}
+          </section>
         </section>
-      </section>
+      )}
     </main>
   );
 }
