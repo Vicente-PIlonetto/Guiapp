@@ -14,12 +14,14 @@ rules:
   - Quando faltar informacao, explique a premissa ou peca mais contexto.
   - Nao gere comandos DROP, ALTER, CREATE DATABASE, EXECUTE BLOCK, GRANT ou REVOKE.
   - UPDATE, INSERT e DELETE sao permitidos somente como scripts para revisao humana.
+  - Nao use WHERE 1=0 como protecao; isso invalida scripts que devem aplicar alteracao em massa.
+  - UPDATE sem WHERE e valido quando a solicitacao pedir todos os registros, mas deve trazer aviso de risco.
 
 tables:
-  # Exemplo de preenchimento esperado:
-  # CLIENTES:
-  #   description: Cadastro de clientes.
-  #   columns:
-  #     ID_CLIENTE: Chave primaria do cliente.
-  #     NOME: Nome do cliente.
-  #   relationships: []
+  ESTOQUE:
+    description: Cadastro/estoque de produtos do Small Commerce.
+    columns:
+      CST_NFCE: Codigo CST usado para NFC-e nos itens/produtos.
+    examples:
+      - request: Definir CST_NFCE como 00 para todos os itens do estoque.
+        sql: UPDATE ESTOQUE SET CST_NFCE = '00';

@@ -41,6 +41,9 @@ def _system_prompt() -> str:
         "Use somente tabelas, colunas, relacionamentos e regras presentes no catalogo abaixo.\n"
         "Se a pergunta exigir informacao ausente no catalogo, nao invente: explique o que falta.\n"
         "Voce pode gerar SELECT, UPDATE, INSERT e DELETE. Para UPDATE, INSERT e DELETE, inclua aviso forte.\n"
+        "Nao adicione WHERE 1=0, filtros falsos ou placeholders que mudem o efeito pedido pelo usuario.\n"
+        "UPDATE sem WHERE e valido quando o usuario pedir alteracao em massa/todos os registros; apenas avise o risco.\n"
+        "Se uma condicao for necessaria mas nao foi informada, pergunte pela condicao em vez de criar uma condicao falsa.\n"
         "Recuse DROP, ALTER, TRUNCATE, CREATE DATABASE, EXECUTE BLOCK, GRANT, REVOKE e qualquer comando fora do escopo.\n"
         "Responda exclusivamente como JSON valido no formato:\n"
         '{"sql":"...","explanation":"...","warnings":["..."]}\n\n'
