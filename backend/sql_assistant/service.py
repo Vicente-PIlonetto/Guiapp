@@ -142,6 +142,26 @@ def _columns_for_table(table_name: str) -> set[str]:
     return set()
 
 
+def _column_mention_pattern(column_name: str) -> re.Pattern:
+    parts = [re.escape(part) for part in column_name.split("_") if part]
+    return re.compile(r"\b" + r"[\s_]*".join(parts) + r"\b", re.IGNORECASE)
+
+
+def _mentioned_columns(question: str, columns: set[str]) -> list[str]:
+    mentions: list[tuple[int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for column in sorted(columns, key=len, reverse=True):
+        match = _column_mention_pattern(column).search(question)
+        if not match:
+            continue
+        span = match.span()
+        if any(not (span[1] <= used[0] or span[0] >= used[1]) for used in occupied):
+            continue
+        occupied.append(span)
+        mentions.append((match.start(), column))
+    return [column for _, column in sorted(mentions)]
+
+
 def _document_numeronf_from_question(question: str) -> str:
     upper_question = question.upper()
     if not any(term in upper_question for term in ("VENDAS", "VENDA", "COMPRAS", "COMPRA")):
@@ -185,8 +205,12 @@ def priority_context(question: str) -> str:
         columns = _columns_for_table("ESTOQUE")
         if columns:
             ordered_columns = sorted(columns)
+            mentioned_columns = _mentioned_columns(question, columns)
             lines.append("Tabela prioritaria para estoque/produtos/itens: ESTOQUE.")
             lines.append(f"Todas as colunas disponiveis em ESTOQUE: {', '.join(ordered_columns)}.")
+            if mentioned_columns:
+                lines.append(f"Colunas da ESTOQUE citadas na solicitacao: {', '.join(mentioned_columns)}.")
+            lines.append("Quando o usuario disser elemento/campo/coluna no contexto de estoque, interprete como coluna da tabela ESTOQUE.")
             if "CST_ICMS" in question.upper() and "CST_ICMS" not in columns and "CST" in columns:
                 lines.append("Campo solicitado CST_ICMS: use a coluna real CST da tabela ESTOQUE.")
             if re.search(r"\bCSOSN\b", question, re.IGNORECASE) and "CSOSN" in columns:
