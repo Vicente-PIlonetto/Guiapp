@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import http.client
 import json
 import re
 import urllib.error
@@ -393,6 +394,8 @@ def _call_hermes(question: str, validation_feedback: str = "") -> str:
         raise SqlAssistantError(f"Hermes retornou HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise SqlAssistantError(f"Nao foi possivel conectar ao Hermes: {exc.reason}") from exc
+    except http.client.RemoteDisconnected as exc:
+        raise SqlAssistantError("Ollama/Hermes fechou a conexao sem resposta. O modelo pode estar carregando, sem memoria ou reiniciando; tente novamente em instantes.") from exc
     except TimeoutError as exc:
         raise SqlAssistantError("Tempo limite ao chamar o Hermes.") from exc
     except json.JSONDecodeError as exc:
