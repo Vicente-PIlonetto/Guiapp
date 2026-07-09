@@ -23,6 +23,14 @@ SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b"
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 SQL_IDENTIFIER_RE = re.compile(r"\b[A-Z_][A-Z0-9_]*\b", re.IGNORECASE)
 ESTOQUE_TERMS = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"}
+NUMBER_WORDS = {
+    "UM": 1,
+    "UMA": 1,
+    "DOIS": 2,
+    "DUAS": 2,
+    "TRES": 3,
+    "TRÊS": 3,
+}
 
 
 class SqlAssistantError(RuntimeError):
@@ -134,6 +142,21 @@ def _columns_for_table(table_name: str) -> set[str]:
     return set()
 
 
+def _document_numeronf_from_question(question: str) -> str:
+    upper_question = question.upper()
+    if not any(term in upper_question for term in ("VENDAS", "VENDA", "COMPRAS", "COMPRA")):
+        return ""
+    nota_match = re.search(r"\b(?:NOTA|NF|NUMERO|N[ºO]|NRO)\s*(\d+)\b", upper_question)
+    serie_match = re.search(r"\bSERIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b|\bSÉRIE\s*(\d+|UM|UMA|DOIS|DUAS|TRES|TRÊS)\b", upper_question)
+    if not nota_match or not serie_match:
+        return ""
+    serie_raw = next((group for group in serie_match.groups() if group), "")
+    serie = NUMBER_WORDS.get(serie_raw, int(serie_raw) if serie_raw.isdigit() else 0)
+    if not serie:
+        return ""
+    return f"{int(nota_match.group(1)):010d}{serie:03d}"
+
+
 def priority_context(question: str) -> str:
     question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
     lines: list[str] = []
@@ -151,6 +174,9 @@ def priority_context(question: str) -> str:
 
     if {"VENDAS", "VENDA", "COMPRAS", "COMPRA", "NOTA"} & question_tokens:
         lines.append("Para localizar nota em VENDAS/COMPRAS, a serie deve ser embutida no valor de NUMERONF; nao use coluna SERIE.")
+        numeronf = _document_numeronf_from_question(question)
+        if numeronf:
+            lines.append(f"Para esta pergunta, use NUMERONF = '{numeronf}'.")
 
     return "\n".join(lines) if lines else "Sem contexto prioritario inferido; use somente o catalogo abaixo."
 
@@ -307,11 +333,14 @@ def _validate_sql_against_catalog(sql: str, question: str = "") -> str:
             return f"A solicitacao e sobre estoque/produtos/itens; use a tabela ESTOQUE, nao {', '.join(wrong_tables)}."
 
     if any(table in {"VENDAS", "COMPRAS"} for table in tables):
+        expected_numeronf = _document_numeronf_from_question(question)
         if re.search(r"\bSERIE\b", scrubbed_sql):
-            return "Nao use a coluna SERIE em VENDAS/COMPRAS; gere a busca somente por NUMERONF com numero da nota preenchido com zeros a esquerda e serie com 3 digitos no final."
+            detail = f" Use NUMERONF = '{expected_numeronf}'." if expected_numeronf else ""
+            return f"Nao use a coluna SERIE em VENDAS/COMPRAS; gere a busca somente por NUMERONF com numero da nota preenchido com zeros a esquerda e serie com 3 digitos no final.{detail}"
         numeronf_match = re.search(r"\bNUMERONF\s*=\s*'([^']+)'", sql, re.IGNORECASE)
         if numeronf_match and not re.fullmatch(r"\d{13}", numeronf_match.group(1)):
-            return "NUMERONF em VENDAS/COMPRAS deve ter 13 digitos: numero da nota com zeros a esquerda seguido da serie com 3 digitos. Exemplo nota 123 serie 1: '0000000123001'."
+            detail = f" Use NUMERONF = '{expected_numeronf}'." if expected_numeronf else " Exemplo nota 123 serie 1: '0000000123001'."
+            return f"NUMERONF em VENDAS/COMPRAS deve ter 13 digitos: numero da nota com zeros a esquerda seguido da serie com 3 digitos.{detail}"
 
     aliases = _table_aliases_in_sql(sql)
     for alias, column in _qualified_columns_in_sql(sql):
