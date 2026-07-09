@@ -466,6 +466,8 @@ def generate_sql(question: str) -> dict:
             validation_error = _validate_sql_against_catalog(sql, cleaned_question)
             if not validation_error:
                 break
+    except SqlAssistantError:
+        raise
     except RuntimeError as exc:
         raise SqlAssistantError(f"Falha ao consultar metadados da base modelo: {exc}") from exc
     if result is None:
