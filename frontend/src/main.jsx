@@ -12,6 +12,12 @@ const actionLabel = {
   repair: 'Iniciar reparo'
 };
 
+function formatElapsed(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
 function App() {
   const [activeView, setActiveView] = useState('modules');
   const [modules, setModules] = useState([]);
@@ -27,6 +33,7 @@ function App() {
   const [sqlResult, setSqlResult] = useState(null);
   const [sqlLoading, setSqlLoading] = useState(false);
   const [sqlError, setSqlError] = useState('');
+  const [sqlElapsedSeconds, setSqlElapsedSeconds] = useState(0);
   const [copiedSql, setCopiedSql] = useState(false);
   const inputRef = useRef(null);
   const uploadSeqRef = useRef(0);
@@ -51,6 +58,16 @@ function App() {
       .then((data) => setConfig(data))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!sqlLoading) return undefined;
+    const startedAt = Date.now();
+    setSqlElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setSqlElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [sqlLoading]);
 
   useEffect(() => {
     if (!job || job.status === 'completed' || job.status === 'error') return;
@@ -194,6 +211,7 @@ function App() {
     }
 
     setSqlLoading(true);
+    setSqlElapsedSeconds(0);
     setSqlError('');
     setSqlResult(null);
     setCopiedSql(false);
@@ -396,9 +414,16 @@ function App() {
                 {sqlError}
               </div>
             )}
+            {sqlLoading && (
+              <div className="sql-processing" role="status" aria-live="polite">
+                <Loader2 className="spin" size={16} />
+                <span>Processando com IA</span>
+                <strong>{formatElapsed(sqlElapsedSeconds)}</strong>
+              </div>
+            )}
             <button className="primary" disabled={sqlLoading} onClick={generateSql}>
               {sqlLoading && <Loader2 className="spin" size={18} />}
-              {sqlLoading ? 'Gerando SQL' : 'Gerar SQL'}
+              {sqlLoading ? `Gerando SQL ${formatElapsed(sqlElapsedSeconds)}` : 'Gerar SQL'}
             </button>
           </section>
 

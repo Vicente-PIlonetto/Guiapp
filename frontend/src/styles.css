@@ -358,6 +358,24 @@ textarea:focus {
   font-size: 18px;
 }
 
+.sql-processing {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  border: 1px solid #2a3340;
+  border-radius: 8px;
+  color: #c7d4e5;
+  background: #080808;
+  padding: 10px 12px;
+}
+
+.sql-processing strong {
+  color: #e6edf3;
+  font-variant-numeric: tabular-nums;
+}
+
 .sql-code {
   min-height: 260px;
   max-height: 520px;
