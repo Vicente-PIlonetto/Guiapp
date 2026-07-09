@@ -17,7 +17,7 @@ DESTRUCTIVE_SQL_RE = re.compile(
 MODIFICATION_SQL_RE = re.compile(r"\b(UPDATE|INSERT|DELETE)\b", re.IGNORECASE)
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
 SQL_BLOCK_RE = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
-SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b[\s\S]*?(?:;|$)", re.IGNORECASE)
+SQL_COMMAND_RE = re.compile(r"\b(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b[\s\S]*", re.IGNORECASE)
 UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s*$", re.IGNORECASE | re.DOTALL)
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
@@ -210,9 +210,10 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "UPDATE sem WHERE e valido quando o usuario pedir alteracao em massa/todos os registros; apenas avise o risco.\n"
         "Se uma condicao for necessaria mas nao foi informada, pergunte pela condicao em vez de criar uma condicao falsa.\n"
         "Recuse DROP, ALTER, TRUNCATE, CREATE DATABASE, EXECUTE BLOCK, GRANT, REVOKE e qualquer comando fora do escopo.\n"
-        "Responda somente com um comando SQL final, sem JSON, sem markdown, sem comentarios e sem explicacao.\n"
-        "Retorne apenas um comando SQL, sem exemplos alternativos e sem multiplos comandos.\n"
-        "O SQL deve estar em uma unica linha, sem quebras de linha, para uso direto no Small Commerce.\n\n"
+        "Responda somente com SQL final, sem JSON, sem markdown, sem comentarios e sem explicacao.\n"
+        "Retorne apenas o SQL final, sem exemplos alternativos.\n"
+        "Pode retornar multiplos comandos quando a solicitacao pedir mais de uma alteracao.\n"
+        "Cada comando deve terminar com ponto e virgula. Evite comentarios e texto fora do SQL.\n\n"
         "Regras de negocio do Small Commerce que devem ser aplicadas pela IA:\n"
         "- Para produtos/itens/estoque, use a tabela ESTOQUE quando ela existir no catalogo; nao use TB_ESTOQUE se TB_ESTOQUE nao estiver no YAML.\n"
         "- Para localizar nota em VENDAS ou COMPRAS, use a coluna NUMERONF quando ela existir no catalogo.\n"
@@ -459,8 +460,6 @@ def generate_sql(question: str) -> dict:
             sql = result["sql"]
             if not sql or not SQL_START_RE.search(sql):
                 raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
-            if _has_multiple_sql_commands(sql):
-                raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
             if DESTRUCTIVE_SQL_RE.search(sql):
                 return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
             validation_error = _validate_sql_against_catalog(sql, cleaned_question)
