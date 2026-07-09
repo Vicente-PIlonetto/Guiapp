@@ -414,16 +414,9 @@ function App() {
                 {sqlError}
               </div>
             )}
-            {sqlLoading && (
-              <div className="sql-processing" role="status" aria-live="polite">
-                <Loader2 className="spin" size={16} />
-                <span>Processando com IA</span>
-                <strong>{formatElapsed(sqlElapsedSeconds)}</strong>
-              </div>
-            )}
             <button className="primary" disabled={sqlLoading} onClick={generateSql}>
               {sqlLoading && <Loader2 className="spin" size={18} />}
-              {sqlLoading ? `Gerando SQL ${formatElapsed(sqlElapsedSeconds)}` : 'Gerar SQL'}
+              {sqlLoading ? 'Gerando SQL' : 'Gerar SQL'}
             </button>
           </section>
 
@@ -446,6 +439,13 @@ function App() {
                 <pre className="sql-code">{sqlResult.sql || '-- Sem SQL gerado.'}</pre>
                 {sqlResult.explanation && <p className="sql-explanation">{sqlResult.explanation}</p>}
               </>
+            )}
+            {sqlLoading && (
+              <div className="sql-processing" role="status" aria-live="polite">
+                <Loader2 className="spin" size={16} />
+                <span>Processando com IA</span>
+                <strong>{formatElapsed(sqlElapsedSeconds)}</strong>
+              </div>
             )}
           </section>
         </section>

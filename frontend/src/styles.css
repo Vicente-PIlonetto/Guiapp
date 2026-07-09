@@ -369,6 +369,7 @@ textarea:focus {
   color: #c7d4e5;
   background: #080808;
   padding: 10px 12px;
+  margin-top: 10px;
 }
 
 .sql-processing strong {
