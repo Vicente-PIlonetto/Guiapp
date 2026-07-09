@@ -139,14 +139,13 @@ def priority_context(question: str) -> str:
     if question_tokens & estoque_terms:
         columns = _columns_for_table("ESTOQUE")
         if columns:
+            ordered_columns = sorted(columns)
             lines.append("Tabela prioritaria para estoque/produtos/itens: ESTOQUE.")
+            lines.append(f"Todas as colunas disponiveis em ESTOQUE: {', '.join(ordered_columns)}.")
             if "CST_ICMS" in question.upper() and "CST_ICMS" not in columns and "CST" in columns:
                 lines.append("Campo solicitado CST_ICMS: use a coluna real CST da tabela ESTOQUE.")
             if re.search(r"CSOSN[\s_]*NFCE|CSOSN[\s_]*NFC[\s_-]*E", question, re.IGNORECASE) and "CSOSN_NFCE" in columns:
                 lines.append("Campo solicitado CSOSN NFCE: use a coluna real CSOSN_NFCE da tabela ESTOQUE.")
-            fiscal_columns = [column for column in ("CST", "CST_ICMS", "CST_NFCE", "CSOSN", "CSOSN_NFCE") if column in columns]
-            if fiscal_columns:
-                lines.append(f"Colunas fiscais validas em ESTOQUE: {', '.join(fiscal_columns)}.")
             lines.append("Nao use TB_ESTOQUE, TBL_ESTOQUE ou CAD_ESTOQUE se esses nomes nao aparecerem no catalogo.")
 
     if {"VENDAS", "VENDA", "COMPRAS", "COMPRA", "NOTA"} & question_tokens:
