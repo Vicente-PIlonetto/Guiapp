@@ -22,7 +22,7 @@ UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 SQL_IDENTIFIER_RE = re.compile(r"\b[A-Z_][A-Z0-9_]*\b", re.IGNORECASE)
-ESTOQUE_TERMS = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"}
+ESTOQUE_TERMS = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS", "ELEMENTO", "ELEMENTOS"}
 NUMBER_WORDS = {
     "UM": 1,
     "UMA": 1,
@@ -109,7 +109,7 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
             scored.append((score, table_name, block))
 
     aliases = {
-        "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"),
+        "ESTOQUE": ("ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS", "ELEMENTO", "ELEMENTOS"),
         "VENDAS": ("VENDA", "VENDAS", "NOTA", "NF"),
         "COMPRAS": ("COMPRA", "COMPRAS", "NOTA", "NF"),
         "NFCE": ("NFCE", "NFC", "NFC_E", "CUPOM"),
@@ -189,6 +189,8 @@ def priority_context(question: str) -> str:
             lines.append(f"Todas as colunas disponiveis em ESTOQUE: {', '.join(ordered_columns)}.")
             if "CST_ICMS" in question.upper() and "CST_ICMS" not in columns and "CST" in columns:
                 lines.append("Campo solicitado CST_ICMS: use a coluna real CST da tabela ESTOQUE.")
+            if re.search(r"\bCSOSN\b", question, re.IGNORECASE) and "CSOSN" in columns:
+                lines.append("Campo solicitado CSOSN: use a coluna real CSOSN da tabela ESTOQUE.")
             if re.search(r"CSOSN[\s_]*NFCE|CSOSN[\s_]*NFC[\s_-]*E", question, re.IGNORECASE) and "CSOSN_NFCE" in columns:
                 lines.append("Campo solicitado CSOSN NFCE: use a coluna real CSOSN_NFCE da tabela ESTOQUE.")
             lines.append("Nao use TB_ESTOQUE, TBL_ESTOQUE ou CAD_ESTOQUE se esses nomes nao aparecerem no catalogo.")
@@ -238,12 +240,12 @@ def _system_prompt(question: str, validation_feedback: str = "", invalid_sql: st
         "Pode retornar multiplos comandos quando a solicitacao pedir mais de uma alteracao.\n"
         "Cada comando deve terminar com ponto e virgula. Evite comentarios e texto fora do SQL.\n\n"
         "Regras de negocio do Small Commerce que devem ser aplicadas pela IA:\n"
-        "- Para produtos/itens/estoque, use a tabela ESTOQUE quando ela existir no catalogo; nao use TB_ESTOQUE se TB_ESTOQUE nao estiver no YAML.\n"
+        "- Para produtos/itens/elementos/estoque, use a tabela ESTOQUE quando ela existir no catalogo; nao use TB_ESTOQUE se TB_ESTOQUE nao estiver no YAML.\n"
         "- Para localizar nota em VENDAS ou COMPRAS, use a coluna NUMERONF quando ela existir no catalogo.\n"
         "- Em VENDAS/COMPRAS, NUMERONF combina numero da nota com zeros a esquerda e serie com 3 digitos; exemplo nota 123 serie 1: '0000000123001'.\n"
         "- Nao use coluna SERIE em VENDAS ou COMPRAS para localizar notas; a serie deve estar embutida no valor de NUMERONF.\n"
         "- Para NFC-e/cupom, use a tabela e coluna reais do catalogo e formate a numeracao com ate 5 digitos; exemplo cupom 1: '00001'.\n"
-        "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
+        "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir. Se disser apenas CSOSN, use CSOSN quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"{correction}"
         f"CONTEXTO PRIORITARIO PARA ESTA SOLICITACAO:\n{priority_context(question)}\n\n"
