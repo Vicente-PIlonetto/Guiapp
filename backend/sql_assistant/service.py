@@ -502,7 +502,7 @@ def generate_sql(question: str) -> dict:
         fallback = _document_lookup_fallback(cleaned_question)
         if fallback and "NUMERONF" in validation_error:
             return fallback
-        raise SqlAssistantError(validation_error)
+        raise SqlAssistantError("A IA nao conseguiu gerar um SQL valido com o catalogo atual. Reformule a solicitacao ou tente novamente.")
 
     warnings = list(dict.fromkeys(result["warnings"]))
     if MODIFICATION_SQL_RE.search(sql):
