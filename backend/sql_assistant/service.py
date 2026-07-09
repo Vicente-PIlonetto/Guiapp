@@ -178,6 +178,62 @@ def _document_lookup_fallback(question: str) -> dict | None:
     }
 
 
+def _value_after_mention(question: str, mention_pattern: str) -> str:
+    match = re.search(mention_pattern, question, re.IGNORECASE)
+    if not match:
+        return ""
+    segment = question[match.end():]
+    value_match = re.search(
+        r"\b(?:COM\s+O\s+VALOR|COM\s+VALOR|VALOR|PARA\s+O\s+VALOR|PARA\s+VALOR|PARA|COMO)(?:\s+DE)?\s+['\"]?([A-Z0-9._-]+)['\"]?",
+        segment,
+        re.IGNORECASE,
+    )
+    return value_match.group(1) if value_match else ""
+
+
+def _sql_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _fast_estoque_update(question: str) -> dict | None:
+    upper_question = question.upper()
+    question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
+    if not question_tokens & ESTOQUE_TERMS:
+        return None
+    if not any(term in upper_question for term in ("TODO", "TODOS", "TODA", "TODAS", "INTEIRO", "INTEIRA")):
+        return None
+    if not any(term in upper_question for term in ("PREENCH", "ALTER", "ATUALIZ", "SET")):
+        return None
+
+    columns = _columns_for_table("ESTOQUE")
+    if not columns:
+        return None
+
+    assignments: list[str] = []
+    cst_value = _value_after_mention(question, r"\bCST[\s_]*ICMS\b|\bCST\b")
+    if cst_value:
+        if "CST" in columns:
+            assignments.append(f"CST = {_sql_string(cst_value)}")
+        elif "CST_ICMS" in columns:
+            assignments.append(f"CST_ICMS = {_sql_string(cst_value)}")
+
+    csosn_nfce_value = _value_after_mention(question, r"\bCSOSN[\s_]*NFCE\b|\bCSOSN[\s_]*NFC[\s_-]*E\b")
+    if csosn_nfce_value and "CSOSN_NFCE" in columns:
+        assignments.append(f"CSOSN_NFCE = {_sql_string(csosn_nfce_value)}")
+
+    if not assignments:
+        return None
+    return {
+        "sql": f"UPDATE ESTOQUE SET {', '.join(assignments)};",
+        "explanation": "",
+        "warnings": ["Script de alteracao: revise, teste em base de homologacao e faca backup antes de usar."],
+    }
+
+
+def _fast_path(question: str) -> dict | None:
+    return _document_lookup_fallback(question) or _fast_estoque_update(question)
+
+
 def priority_context(question: str) -> str:
     question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
     lines: list[str] = []
@@ -472,6 +528,10 @@ def generate_sql(question: str) -> dict:
         raise SqlAssistantError("Pergunta muito longa. Reduza o texto e tente novamente.")
     if DESTRUCTIVE_SQL_RE.search(cleaned_question):
         return _refusal("Nao posso auxiliar com comandos destrutivos ou administrativos fora do escopo de suporte.")
+
+    fast_result = _fast_path(cleaned_question)
+    if fast_result:
+        return fast_result
 
     result = None
     validation_error = ""
