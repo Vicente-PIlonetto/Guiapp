@@ -47,11 +47,21 @@ class SqlAssistantResponse(BaseModel):
 
 UPLOAD_TTL_SECONDS = 5 * 60
 LOGO_JOB_TTL_SECONDS = 5 * 60
+cleanup_tasks: set[asyncio.Task] = set()
 
 
 @app.on_event("startup")
 def startup() -> None:
     cleanup_startup_storage()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    pending_cleanup_tasks = list(cleanup_tasks)
+    for task in pending_cleanup_tasks:
+        task.cancel()
+    if pending_cleanup_tasks:
+        await asyncio.gather(*pending_cleanup_tasks, return_exceptions=True)
 
 
 @app.get("/api/health")
@@ -96,6 +106,12 @@ async def cleanup_upload_later(upload_id: str) -> None:
 async def cleanup_job_artifacts_later(job_id: str, delay_seconds: int) -> None:
     await asyncio.sleep(delay_seconds)
     cleanup_job_artifacts(job_id)
+
+
+def schedule_cleanup(coro) -> None:
+    task = asyncio.create_task(coro)
+    cleanup_tasks.add(task)
+    task.add_done_callback(cleanup_tasks.discard)
 
 
 def cleanup_job_artifacts(job_id: str) -> None:
@@ -193,7 +209,7 @@ async def create_upload(
     file: UploadFile = File(...),
 ) -> dict:
     metadata = await save_upload(module_id, file)
-    background_tasks.add_task(cleanup_upload_later, metadata["upload_id"])
+    schedule_cleanup(cleanup_upload_later(metadata["upload_id"]))
     return {"upload": metadata}
 
 
@@ -205,7 +221,7 @@ async def create_raw_upload(
     filename: str,
 ) -> dict:
     metadata = await save_raw_upload(module_id, filename, request)
-    background_tasks.add_task(cleanup_upload_later, metadata["upload_id"])
+    schedule_cleanup(cleanup_upload_later(metadata["upload_id"]))
     return {"upload": metadata}
 
 
@@ -252,7 +268,7 @@ def create_job_from_upload(
     add_job(job)
     background_tasks.add_task(run_job, job, module, upload_path)
     if module.runner == "logo_adjustment":
-        background_tasks.add_task(cleanup_job_artifacts_later, job_id, LOGO_JOB_TTL_SECONDS)
+        schedule_cleanup(cleanup_job_artifacts_later(job_id, LOGO_JOB_TTL_SECONDS))
     return {"job_id": job_id}
 
 
@@ -296,7 +312,7 @@ async def create_job(
     add_job(job)
     background_tasks.add_task(run_job, job, module, upload_path)
     if module.runner == "logo_adjustment":
-        background_tasks.add_task(cleanup_job_artifacts_later, job_id, LOGO_JOB_TTL_SECONDS)
+        schedule_cleanup(cleanup_job_artifacts_later(job_id, LOGO_JOB_TTL_SECONDS))
     return {"job_id": job_id}
 
 
