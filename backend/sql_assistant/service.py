@@ -157,6 +157,27 @@ def _document_numeronf_from_question(question: str) -> str:
     return f"{int(nota_match.group(1)):010d}{serie:03d}"
 
 
+def _document_table_from_question(question: str) -> str:
+    upper_question = question.upper()
+    if "VENDAS" in upper_question or "VENDA" in upper_question:
+        return "VENDAS"
+    if "COMPRAS" in upper_question or "COMPRA" in upper_question:
+        return "COMPRAS"
+    return ""
+
+
+def _document_lookup_fallback(question: str) -> dict | None:
+    table = _document_table_from_question(question)
+    numeronf = _document_numeronf_from_question(question)
+    if not table or not numeronf:
+        return None
+    return {
+        "sql": f"SELECT * FROM {table} WHERE NUMERONF = '{numeronf}';",
+        "explanation": "",
+        "warnings": [],
+    }
+
+
 def priority_context(question: str) -> str:
     question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
     lines: list[str] = []
@@ -474,6 +495,9 @@ def generate_sql(question: str) -> dict:
 
     sql = result["sql"]
     if validation_error:
+        fallback = _document_lookup_fallback(cleaned_question)
+        if fallback and "NUMERONF" in validation_error:
+            return fallback
         raise SqlAssistantError(validation_error)
 
     warnings = list(dict.fromkeys(result["warnings"]))
