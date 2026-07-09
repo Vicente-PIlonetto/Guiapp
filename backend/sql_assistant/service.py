@@ -76,6 +76,12 @@ def active_generators_index() -> str:
     return before_tables or "Generators nao listados no catalogo YAML."
 
 
+def _truncate_text(value: str, max_chars: int = 4000) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars].rstrip() + "\n...conteudo reduzido para acelerar a resposta..."
+
+
 def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     catalog = load_small_commerce_catalog()
     rules = catalog.split("\ntables:\n", 1)[0].strip()
@@ -107,22 +113,16 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     selected = [block for _, _, block in sorted(scored, reverse=True)[:max_blocks]]
     if not selected:
         selected = [block for _, block in active_table_blocks()[:3]]
-    return f"{rules}\n\ntables:\n" + "\n".join(selected)
+    return _truncate_text(f"{rules}\n\ntables:\n" + "\n".join(selected), 12000)
 
 
 def _table_columns(table_block: str) -> list[str]:
     return re.findall(r"^      ([A-Z0-9_]+):", table_block, re.MULTILINE)
 
 
-def compact_catalog_index() -> str:
-    lines = []
-    for table_name, block in active_table_blocks():
-        columns = _table_columns(block)
-        if columns:
-            lines.append(f"{table_name}: {', '.join(columns)}")
-        else:
-            lines.append(f"{table_name}: sem colunas listadas")
-    return "\n".join(lines)
+def compact_table_index() -> str:
+    table_names = [table_name for table_name, _ in active_table_blocks()]
+    return _truncate_text(", ".join(sorted(table_names)), 4000)
 
 
 def _columns_for_table(table_name: str) -> set[str]:
@@ -196,8 +196,8 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"{correction}"
         f"CONTEXTO PRIORITARIO PARA ESTA SOLICITACAO:\n{priority_context(question)}\n\n"
-        f"INDICE COMPLETO DE GENERATORS:\n{active_generators_index()}\n\n"
-        f"INDICE COMPLETO DE TABELAS E COLUNAS:\n{compact_catalog_index()}\n\n"
+        f"INDICE DE GENERATORS:\n{_truncate_text(active_generators_index(), 2000)}\n\n"
+        f"INDICE DE TABELAS DISPONIVEIS:\n{compact_table_index()}\n\n"
         f"BLOCOS DETALHADOS MAIS RELEVANTES:\n{relevant_catalog(question)}"
     )
 
