@@ -125,6 +125,36 @@ def compact_catalog_index() -> str:
     return "\n".join(lines)
 
 
+def _columns_for_table(table_name: str) -> set[str]:
+    for candidate, block in active_table_blocks():
+        if candidate == table_name:
+            return set(_table_columns(block))
+    return set()
+
+
+def priority_context(question: str) -> str:
+    question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
+    lines: list[str] = []
+    estoque_terms = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"}
+    if question_tokens & estoque_terms:
+        columns = _columns_for_table("ESTOQUE")
+        if columns:
+            lines.append("Tabela prioritaria para estoque/produtos/itens: ESTOQUE.")
+            if "CST_ICMS" in question.upper() and "CST_ICMS" not in columns and "CST" in columns:
+                lines.append("Campo solicitado CST_ICMS: use a coluna real CST da tabela ESTOQUE.")
+            if re.search(r"CSOSN[\s_]*NFCE|CSOSN[\s_]*NFC[\s_-]*E", question, re.IGNORECASE) and "CSOSN_NFCE" in columns:
+                lines.append("Campo solicitado CSOSN NFCE: use a coluna real CSOSN_NFCE da tabela ESTOQUE.")
+            fiscal_columns = [column for column in ("CST", "CST_ICMS", "CST_NFCE", "CSOSN", "CSOSN_NFCE") if column in columns]
+            if fiscal_columns:
+                lines.append(f"Colunas fiscais validas em ESTOQUE: {', '.join(fiscal_columns)}.")
+            lines.append("Nao use TB_ESTOQUE, TBL_ESTOQUE ou CAD_ESTOQUE se esses nomes nao aparecerem no catalogo.")
+
+    if {"VENDAS", "VENDA", "COMPRAS", "COMPRA", "NOTA"} & question_tokens:
+        lines.append("Para localizar nota em VENDAS/COMPRAS, a serie deve ser embutida no valor de NUMERONF; nao use coluna SERIE.")
+
+    return "\n".join(lines) if lines else "Sem contexto prioritario inferido; use somente o catalogo abaixo."
+
+
 def _refusal(message: str) -> dict:
     return {
         "sql": "",
@@ -166,6 +196,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"{correction}"
+        f"CONTEXTO PRIORITARIO PARA ESTA SOLICITACAO:\n{priority_context(question)}\n\n"
         f"INDICE COMPLETO DE GENERATORS:\n{active_generators_index()}\n\n"
         f"INDICE COMPLETO DE TABELAS E COLUNAS:\n{compact_catalog_index()}\n\n"
         f"BLOCOS DETALHADOS MAIS RELEVANTES:\n{relevant_catalog(question)}"
