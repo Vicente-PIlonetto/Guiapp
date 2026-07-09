@@ -22,6 +22,7 @@ UPDATE_WHERE_TRUE_RE = re.compile(r"^(\s*UPDATE\b.+?)\s+WHERE\s+1\s*=\s*1\s*;?\s
 SQL_START_RE = re.compile(r"^\s*(SELECT|UPDATE|INSERT|DELETE|SET\s+GENERATOR)\b", re.IGNORECASE)
 TOKEN_RE = re.compile(r"[A-Z0-9_]{3,}", re.IGNORECASE)
 SQL_IDENTIFIER_RE = re.compile(r"\b[A-Z_][A-Z0-9_]*\b", re.IGNORECASE)
+ESTOQUE_TERMS = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"}
 
 
 class SqlAssistantError(RuntimeError):
@@ -136,8 +137,7 @@ def _columns_for_table(table_name: str) -> set[str]:
 def priority_context(question: str) -> str:
     question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
     lines: list[str] = []
-    estoque_terms = {"ESTOQUE", "PRODUTO", "PRODUTOS", "ITEM", "ITENS"}
-    if question_tokens & estoque_terms:
+    if question_tokens & ESTOQUE_TERMS:
         columns = _columns_for_table("ESTOQUE")
         if columns:
             ordered_columns = sorted(columns)
@@ -284,7 +284,7 @@ def _qualified_columns_in_sql(sql: str) -> list[tuple[str, str]]:
     return [(match.group(1), match.group(2)) for match in re.finditer(r"\b([A-Z_][A-Z0-9_]*)\.([A-Z_][A-Z0-9_]*)\b", scrubbed)]
 
 
-def _validate_sql_against_catalog(sql: str) -> str:
+def _validate_sql_against_catalog(sql: str, question: str = "") -> str:
     if re.match(r"^\s*SET\s+GENERATOR\b", sql, re.IGNORECASE):
         return ""
 
@@ -299,6 +299,12 @@ def _validate_sql_against_catalog(sql: str) -> str:
 
     if not tables:
         return ""
+
+    question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
+    if question_tokens & ESTOQUE_TERMS and "ESTOQUE" in columns_by_table:
+        wrong_tables = [table for table in tables if table != "ESTOQUE"]
+        if wrong_tables:
+            return f"A solicitacao e sobre estoque/produtos/itens; use a tabela ESTOQUE, nao {', '.join(wrong_tables)}."
 
     if any(table in {"VENDAS", "COMPRAS"} for table in tables):
         if re.search(r"\bSERIE\b", scrubbed_sql):
@@ -428,7 +434,7 @@ def generate_sql(question: str) -> dict:
                 raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
             if DESTRUCTIVE_SQL_RE.search(sql):
                 return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
-            validation_error = _validate_sql_against_catalog(sql)
+            validation_error = _validate_sql_against_catalog(sql, cleaned_question)
             if not validation_error:
                 break
     except RuntimeError as exc:
