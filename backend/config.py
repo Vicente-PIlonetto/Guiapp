@@ -22,6 +22,11 @@ class Settings:
     hermes_api_key = os.getenv("HERMES_API_KEY", "")
     hermes_model = os.getenv("HERMES_MODEL", "")
     hermes_timeout_seconds = int(os.getenv("HERMES_TIMEOUT_SECONDS", "60"))
+    sql_assistant_schema_db = os.getenv("SQL_ASSISTANT_SCHEMA_DB", "")
+    sql_assistant_isql_bin = os.getenv("SQL_ASSISTANT_ISQL_BIN", os.getenv("ISQL_BIN", "isql"))
+    sql_assistant_firebird_home = os.getenv("SQL_ASSISTANT_FIREBIRD_HOME", "")
+    sql_assistant_firebird_lib = os.getenv("SQL_ASSISTANT_FIREBIRD_LIB", "")
+    sql_assistant_schema_cache_seconds = int(os.getenv("SQL_ASSISTANT_SCHEMA_CACHE_SECONDS", "300"))
 
     @property
     def storage_path(self) -> Path:

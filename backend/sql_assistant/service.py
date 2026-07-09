@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 from backend.config import get_settings
+from backend.sql_assistant import schema_source
 
 
 DESTRUCTIVE_SQL_RE = re.compile(
@@ -56,12 +57,31 @@ def catalog_table_blocks() -> list[tuple[str, str]]:
     return blocks
 
 
+def active_table_blocks() -> list[tuple[str, str]]:
+    if schema_source.schema_db_enabled():
+        snapshot = schema_source.load_schema_snapshot()
+        return schema_source.table_blocks_from_snapshot(snapshot)
+    return catalog_table_blocks()
+
+
+def active_generators_index() -> str:
+    if schema_source.schema_db_enabled():
+        snapshot = schema_source.load_schema_snapshot()
+        return schema_source.generators_index_from_snapshot(snapshot)
+    catalog = load_small_commerce_catalog()
+    if "\ngenerators:\n" not in catalog:
+        return "Generators nao listados no catalogo YAML."
+    after = catalog.split("\ngenerators:\n", 1)[1]
+    before_tables = after.split("\ntables:\n", 1)[0].strip()
+    return before_tables or "Generators nao listados no catalogo YAML."
+
+
 def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     catalog = load_small_commerce_catalog()
     rules = catalog.split("\ntables:\n", 1)[0].strip()
     question_tokens = {token.upper() for token in TOKEN_RE.findall(question)}
     scored: list[tuple[int, str, str]] = []
-    for table_name, block in catalog_table_blocks():
+    for table_name, block in active_table_blocks():
         block_upper = block.upper()
         score = 0
         if table_name in question_tokens:
@@ -80,13 +100,13 @@ def relevant_catalog(question: str, max_blocks: int = 8) -> str:
     }
     for table_name, terms in aliases.items():
         if any(term in question_tokens for term in terms):
-            for candidate_name, block in catalog_table_blocks():
+            for candidate_name, block in active_table_blocks():
                 if candidate_name == table_name and all(candidate_name != item[1] for item in scored):
                     scored.append((10, candidate_name, block))
 
     selected = [block for _, _, block in sorted(scored, reverse=True)[:max_blocks]]
     if not selected:
-        selected = [block for _, block in catalog_table_blocks()[:3]]
+        selected = [block for _, block in active_table_blocks()[:3]]
     return f"{rules}\n\ntables:\n" + "\n".join(selected)
 
 
@@ -94,10 +114,9 @@ def _table_columns(table_block: str) -> list[str]:
     return re.findall(r"^      ([A-Z0-9_]+):", table_block, re.MULTILINE)
 
 
-@lru_cache
 def compact_catalog_index() -> str:
     lines = []
-    for table_name, block in catalog_table_blocks():
+    for table_name, block in active_table_blocks():
         columns = _table_columns(block)
         if columns:
             lines.append(f"{table_name}: {', '.join(columns)}")
@@ -118,7 +137,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
     correction = ""
     if validation_feedback:
         correction = (
-            "A tentativa anterior foi rejeitada pela validacao contra o catalogo YAML.\n"
+            "A tentativa anterior foi rejeitada pela validacao contra o catalogo de metadados.\n"
             f"Erro encontrado: {validation_feedback}\n"
             "Corrija usando somente tabelas e colunas listadas no catalogo. Nao repita tabela ou coluna invalida.\n"
             "Se o erro informar um nome correto, substitua obrigatoriamente pelo nome correto e retorne apenas o SQL corrigido.\n\n"
@@ -127,7 +146,7 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
         "Nunca execute SQL. Gere apenas texto para revisao humana.\n"
         "Use somente tabelas, colunas, relacionamentos e regras presentes no catalogo abaixo.\n"
-        "Use os nomes EXATOS do YAML. Nao adicione prefixos como TB_, TBL_ ou CAD_ se eles nao existirem no catalogo.\n"
+        "Use os nomes EXATOS do catalogo. Nao adicione prefixos como TB_, TBL_ ou CAD_ se eles nao existirem no catalogo.\n"
         "Se a pergunta exigir informacao ausente no catalogo, nao invente: explique o que falta.\n"
         "Voce pode gerar SELECT, UPDATE, INSERT e DELETE. Para UPDATE, INSERT e DELETE, inclua aviso forte.\n"
         "Nao adicione WHERE 1=0, filtros falsos ou placeholders que mudem o efeito pedido pelo usuario.\n"
@@ -147,8 +166,9 @@ def _system_prompt(question: str, validation_feedback: str = "") -> str:
         "- Para campos fiscais do ESTOQUE, use a coluna real existente no catalogo. Se o usuario disser CST_ICMS mas o catalogo tiver CST, use CST. Se disser CSOSN NFCE, prefira CSOSN_NFCE quando existir.\n"
         "- Para SET GENERATOR, use o generator do catalogo e coloque o numero anterior ao documento que deve iniciar.\n\n"
         f"{correction}"
-        f"INDICE COMPLETO DE TABELAS E COLUNAS DO YAML:\n{compact_catalog_index()}\n\n"
-        f"BLOCOS DETALHADOS MAIS RELEVANTES DO YAML:\n{relevant_catalog(question)}"
+        f"INDICE COMPLETO DE GENERATORS:\n{active_generators_index()}\n\n"
+        f"INDICE COMPLETO DE TABELAS E COLUNAS:\n{compact_catalog_index()}\n\n"
+        f"BLOCOS DETALHADOS MAIS RELEVANTES:\n{relevant_catalog(question)}"
     )
 
 
@@ -166,7 +186,7 @@ def _has_multiple_sql_commands(sql: str) -> bool:
 
 
 def _catalog_columns_by_table() -> dict[str, set[str]]:
-    return {table_name: set(_table_columns(block)) for table_name, block in catalog_table_blocks()}
+    return {table_name: set(_table_columns(block)) for table_name, block in active_table_blocks()}
 
 
 def _strip_sql_literals(sql: str) -> str:
@@ -365,18 +385,21 @@ def generate_sql(question: str) -> dict:
 
     result = None
     validation_error = ""
-    for _attempt in range(3):
-        result = _extract_sql_content(_call_hermes(cleaned_question, validation_error))
-        sql = result["sql"]
-        if not sql or not SQL_START_RE.search(sql):
-            raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
-        if _has_multiple_sql_commands(sql):
-            raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
-        if DESTRUCTIVE_SQL_RE.search(sql):
-            return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
-        validation_error = _validate_sql_against_catalog(sql)
-        if not validation_error:
-            break
+    try:
+        for _attempt in range(3):
+            result = _extract_sql_content(_call_hermes(cleaned_question, validation_error))
+            sql = result["sql"]
+            if not sql or not SQL_START_RE.search(sql):
+                raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
+            if _has_multiple_sql_commands(sql):
+                raise SqlAssistantError("A IA retornou multiplos comandos. Refine a solicitacao para gerar apenas um comando.")
+            if DESTRUCTIVE_SQL_RE.search(sql):
+                return _refusal("A resposta foi bloqueada porque continha comando destrutivo ou administrativo.")
+            validation_error = _validate_sql_against_catalog(sql)
+            if not validation_error:
+                break
+    except RuntimeError as exc:
+        raise SqlAssistantError(f"Falha ao consultar metadados da base modelo: {exc}") from exc
     if result is None:
         raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
 
