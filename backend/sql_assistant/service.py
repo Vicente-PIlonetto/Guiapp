@@ -210,14 +210,16 @@ def _refusal(message: str) -> dict:
     }
 
 
-def _system_prompt(question: str, validation_feedback: str = "") -> str:
+def _system_prompt(question: str, validation_feedback: str = "", invalid_sql: str = "") -> str:
     correction = ""
     if validation_feedback:
         correction = (
             "A tentativa anterior foi rejeitada pela validacao contra o catalogo de metadados.\n"
+            f"SQL invalido gerado anteriormente: {invalid_sql}\n"
             f"Erro encontrado: {validation_feedback}\n"
             "Corrija usando somente tabelas e colunas listadas no catalogo. Nao repita tabela ou coluna invalida.\n"
             "Se o erro informar um nome correto, substitua obrigatoriamente pelo nome correto e retorne apenas o SQL corrigido.\n\n"
+            "Exemplo: se o erro disser para usar ESTOQUE em vez de ICM, reescreva o UPDATE usando ESTOQUE.\n\n"
         )
     return (
         "Voce e um assistente interno de suporte para gerar SQL Firebird do Small Commerce.\n"
@@ -423,7 +425,7 @@ def _extract_sql_content(content: str) -> dict:
     }
 
 
-def _call_hermes(question: str, validation_feedback: str = "") -> str:
+def _call_hermes(question: str, validation_feedback: str = "", invalid_sql: str = "") -> str:
     settings = get_settings()
     if not settings.hermes_api_url:
         raise SqlAssistantError("HERMES_API_URL nao configurado no servidor.")
@@ -432,7 +434,7 @@ def _call_hermes(question: str, validation_feedback: str = "") -> str:
         "model": settings.hermes_model or None,
         "temperature": 0.1,
         "messages": [
-            {"role": "system", "content": _system_prompt(question, validation_feedback)},
+            {"role": "system", "content": _system_prompt(question, validation_feedback, invalid_sql)},
             {"role": "user", "content": question},
         ],
     }
@@ -475,9 +477,10 @@ def generate_sql(question: str) -> dict:
 
     result = None
     validation_error = ""
+    invalid_sql = ""
     try:
         for _attempt in range(3):
-            result = _extract_sql_content(_call_hermes(cleaned_question, validation_error))
+            result = _extract_sql_content(_call_hermes(cleaned_question, validation_error, invalid_sql))
             sql = result["sql"]
             if not sql or not SQL_START_RE.search(sql):
                 raise SqlAssistantError("A IA nao retornou um comando SQL valido.")
@@ -486,6 +489,7 @@ def generate_sql(question: str) -> dict:
             validation_error = _validate_sql_against_catalog(sql, cleaned_question)
             if not validation_error:
                 break
+            invalid_sql = sql
     except SqlAssistantError:
         raise
     except RuntimeError as exc:
